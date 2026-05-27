@@ -37,7 +37,12 @@ def load_yaml(path: Path) -> dict[str, Any]:
     return data
 
 
+def save_yaml(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as file:
+        yaml.safe_dump(data, file, allow_unicode=True, sort_keys=False)
+
+
 def load_app_config(paths: AppPaths | None = None) -> dict[str, Any]:
     resolved = paths or default_paths()
     return load_yaml(resolved.config)
-

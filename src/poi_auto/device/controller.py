@@ -10,7 +10,11 @@ class DeviceController:
         self.config = config
         window_config = config.get("window", {})
         input_config = config.get("input", {})
-        self.window_finder = WindowFinder(window_config.get("title_keyword", "Poi"))
+        self.window_finder = WindowFinder(
+            title_keyword=window_config.get("title_keyword", "Poi"),
+            selected_title=window_config.get("selected_title", ""),
+            exclude_own_process=bool(window_config.get("exclude_own_process", True)),
+        )
         self.capture = ScreenCapture()
         self.mouse = MouseController(input_config.get("move_duration_ms", 0))
         self.last_screenshot: Screenshot | None = None
@@ -52,4 +56,3 @@ class DeviceController:
             source_region=self.last_screenshot.source_region,
             delay_ms=delay,
         )
-
