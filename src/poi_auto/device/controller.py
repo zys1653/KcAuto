@@ -29,9 +29,8 @@ class DeviceController:
 
     def capture_game(self) -> Screenshot:
         game_config = self.config.get("game", {})
-        crop_mode = game_config.get("crop_mode", "left_half")
         client = self.window_finder.find_client_rect()
-        region = game_region_from_client(client, crop_mode)
+        region = game_region_from_client(client, game_config)
         raw = self.capture.grab(region)
         image = resize_to_logical(raw, self.logical_width, self.logical_height)
         screenshot = Screenshot(

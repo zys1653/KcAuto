@@ -5,7 +5,11 @@ window:
 game:
   logical_width: 1200
   logical_height: 720
-  crop_mode: full
+  capture_width: 1200
+  capture_height: 720
+  offset_x: 0
+  offset_y: 0
+  crop_mode: left_center_fixed
 input:
   click_delay_ms: 300
   move_duration_ms: 0
@@ -19,3 +23,7 @@ sortie:
   retreat_on_medium_damage: true
 hotkeys:
   stop: z
+preview:
+  enabled: true
+  interval_ms: 200
+  show_mouse: true

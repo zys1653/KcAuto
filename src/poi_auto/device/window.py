@@ -19,6 +19,9 @@ class Rect:
     def bottom(self) -> int:
         return self.top + self.height
 
+    def contains(self, x: int, y: int) -> bool:
+        return self.left <= x < self.right and self.top <= y < self.bottom
+
 
 @dataclass(frozen=True)
 class WindowInfo:
@@ -80,17 +83,29 @@ class WindowFinder:
         selected = next((item for item in matches if item.title == selected_title), None)
         target = selected or matches[0]
 
-        hwnd = target.hwnd
-        title = target.title
-        left_top = win32gui.ClientToScreen(hwnd, (0, 0))
-        right, bottom = win32gui.GetClientRect(hwnd)[2:]
+        left_top = win32gui.ClientToScreen(target.hwnd, (0, 0))
+        right, bottom = win32gui.GetClientRect(target.hwnd)[2:]
         if right <= 0 or bottom <= 0:
-            raise RuntimeError(f"窗口客户区大小异常：{title}")
-        self.last_title = title
+            raise RuntimeError(f"窗口客户区大小异常：{target.title}")
+        self.last_title = target.title
         return Rect(left=left_top[0], top=left_top[1], width=right, height=bottom)
 
 
-def game_region_from_client(client: Rect, crop_mode: str) -> Rect:
+def game_region_from_client(client: Rect, game_config: dict) -> Rect:
+    crop_mode = game_config.get("crop_mode", "left_center_fixed")
+    if crop_mode == "left_center_fixed":
+        width = int(game_config.get("capture_width", game_config.get("logical_width", 1200)))
+        height = int(game_config.get("capture_height", game_config.get("logical_height", 720)))
+        offset_x = int(game_config.get("offset_x", 0))
+        offset_y = int(game_config.get("offset_y", 0))
+        if client.width < width or client.height < height:
+            raise RuntimeError(
+                "目标窗口客户区小于固定截图区域："
+                f"client={client.width}x{client.height}, capture={width}x{height}"
+            )
+        left = client.left + offset_x
+        top = client.top + round((client.height - height) / 2) + offset_y
+        return Rect(left=left, top=top, width=width, height=height)
     if crop_mode == "left_half":
         return Rect(client.left, client.top, client.width // 2, client.height)
     if crop_mode == "full":
