@@ -13,6 +13,7 @@ class MatchResult:
     score: float
     location: tuple[int, int] | None = None
     template_path: Path | None = None
+    error: str = ""
 
 
 class Recognizer:
@@ -32,10 +33,17 @@ class Recognizer:
                 image=image,
                 template=Path(str(rule.get("template", ""))),
                 threshold=float(rule.get("threshold", self.default_threshold)),
+                region=rule.get("region"),
             )
         return MatchResult(False, 0.0)
 
-    def match_template(self, image: np.ndarray, template: Path, threshold: float | None = None) -> MatchResult:
+    def match_template(
+        self,
+        image: np.ndarray,
+        template: Path,
+        threshold: float | None = None,
+        region: dict[str, Any] | None = None,
+    ) -> MatchResult:
         try:
             import cv2
         except ImportError as exc:
@@ -43,15 +51,28 @@ class Recognizer:
 
         template_path = self.templates_root / template
         if not template_path.exists():
-            return MatchResult(False, 0.0, template_path=template_path)
+            return MatchResult(False, 0.0, template_path=template_path, error="missing_template")
 
         source = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+        offset_x = 0
+        offset_y = 0
+        if region:
+            offset_x = int(region.get("x", 0))
+            offset_y = int(region.get("y", 0))
+            width = int(region.get("width", image.shape[1] - offset_x))
+            height = int(region.get("height", image.shape[0] - offset_y))
+            if offset_x < 0 or offset_y < 0 or width <= 0 or height <= 0:
+                return MatchResult(False, 0.0, template_path=template_path, error="invalid_region")
+            source = source[offset_y : offset_y + height, offset_x : offset_x + width]
+
         tpl = cv2.imread(str(template_path), cv2.IMREAD_COLOR)
         if tpl is None:
-            return MatchResult(False, 0.0, template_path=template_path)
+            return MatchResult(False, 0.0, template_path=template_path, error="unreadable_template")
+        if source.shape[0] < tpl.shape[0] or source.shape[1] < tpl.shape[1]:
+            return MatchResult(False, 0.0, template_path=template_path, error="template_larger_than_source")
 
         result = cv2.matchTemplate(source, tpl, cv2.TM_CCOEFF_NORMED)
         _min_val, max_val, _min_loc, max_loc = cv2.minMaxLoc(result)
         limit = self.default_threshold if threshold is None else threshold
-        return MatchResult(max_val >= limit, float(max_val), max_loc, template_path)
-
+        location = (max_loc[0] + offset_x, max_loc[1] + offset_y)
+        return MatchResult(max_val >= limit, float(max_val), location, template_path)

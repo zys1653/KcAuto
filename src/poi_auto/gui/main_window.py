@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from functools import partial
 import time
 from threading import Event
 from typing import Any
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QPlainTextEdit,
+    QScrollArea,
     QSpinBox,
     QSplitter,
     QVBoxLayout,
@@ -34,6 +36,7 @@ from poi_auto.device.capture import Screenshot
 from poi_auto.device.controller import DeviceController
 from poi_auto.device.window import Rect, WindowFinder
 from poi_auto.tasks.sortie.task import SortieTask
+from poi_auto.vision.pages import PageMatch, PageMatcher
 from poi_auto.vision.recognizer import Recognizer
 
 
@@ -100,13 +103,24 @@ class MainWindow(QMainWindow):
         self.runner = TaskRunner(self.build_context)
         self.hotkey = GlobalHotkey(lambda: self.events.stop_requested.emit())
         self.last_preview_error_at = 0.0
+        self.last_page_match_at = 0.0
         self.last_screenshot: Screenshot | None = None
+        self.current_page: PageMatch | None = None
 
         self.state_label = QLabel("状态：空闲")
         self.image_label = QLabel("实时预览会显示 Poi 游戏画面")
         self.image_label.setAlignment(Qt.AlignCenter)
         self.image_label.setMinimumSize(720, 432)
         self.image_label.setStyleSheet("QLabel { background: #15171a; color: #d6d8dc; border: 1px solid #30343b; }")
+
+        self.page_label = QLabel("当前页面：unknown")
+        self.page_detail_label = QLabel("命中：0/0  置信度：0.000")
+        self.match_detail_view = QPlainTextEdit()
+        self.match_detail_view.setReadOnly(True)
+        self.match_detail_view.setMaximumHeight(160)
+        self.action_buttons_widget = QWidget()
+        self.action_buttons_layout = QVBoxLayout(self.action_buttons_widget)
+        self.action_buttons_layout.setContentsMargins(0, 0, 0, 0)
 
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
@@ -133,7 +147,7 @@ class MainWindow(QMainWindow):
         self.refresh_window_list()
         self.start_hotkey()
         self.update_preview_timer()
-        self.append_log("程序已启动。请选择 Poi 目标窗口；实时预览会裁出左侧 1200x720 游戏画面。")
+        self.append_log("程序已启动。页面监控会读取 config/pages.yaml 并匹配当前截图。")
 
     def _build_config_widgets(self) -> None:
         window = self.config.get("window", {})
@@ -218,6 +232,7 @@ class MainWindow(QMainWindow):
         right_layout = QVBoxLayout(right)
         right_layout.addWidget(QLabel("游戏截图预览"))
         right_layout.addWidget(self.image_label, 1)
+        right_layout.addWidget(self.build_page_panel())
 
         splitter.addWidget(left)
         splitter.addWidget(right)
@@ -270,6 +285,21 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.save_config_button)
         return panel
 
+    def build_page_panel(self) -> QWidget:
+        group = QGroupBox("页面识别")
+        layout = QVBoxLayout(group)
+        layout.addWidget(self.page_label)
+        layout.addWidget(self.page_detail_label)
+        layout.addWidget(QLabel("模板详情"))
+        layout.addWidget(self.match_detail_view)
+        layout.addWidget(QLabel("当前页面功能入口"))
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(self.action_buttons_widget)
+        scroll.setMaximumHeight(120)
+        layout.addWidget(scroll)
+        return group
+
     def build_context(self, stop_event: Event, config: dict[str, Any] | None = None) -> RuntimeContext:
         if config is None:
             self.config = load_app_config(self.paths)
@@ -279,11 +309,13 @@ class MainWindow(QMainWindow):
             templates_root=self.paths.templates,
             default_threshold=float(config.get("vision", {}).get("match_threshold", 0.86)),
         )
+        page_matcher = PageMatcher.from_file(self.paths.pages, recognizer)
         return RuntimeContext(
             config=config,
             paths=self.paths,
             device=device,
             recognizer=recognizer,
+            page_matcher=page_matcher,
             stop_event=stop_event,
             logger=self.thread_log,
         )
@@ -291,13 +323,8 @@ class MainWindow(QMainWindow):
     def config_from_gui(self) -> dict[str, Any]:
         selected_title = self.target_window_combo.currentData() or ""
         config = dict(self.config)
-        config.setdefault("window", {})
-        config.setdefault("game", {})
-        config.setdefault("input", {})
-        config.setdefault("vision", {})
-        config.setdefault("sortie", {})
-        config.setdefault("hotkeys", {})
-        config.setdefault("preview", {})
+        for key in ("window", "game", "input", "vision", "sortie", "hotkeys", "preview"):
+            config.setdefault(key, {})
         config["window"] = {
             **config["window"],
             "title_keyword": self.title_keyword_edit.text().strip(),
@@ -319,10 +346,7 @@ class MainWindow(QMainWindow):
             "click_delay_ms": self.click_delay_spin.value(),
             "move_duration_ms": self.move_duration_spin.value(),
         }
-        config["vision"] = {
-            **config["vision"],
-            "match_threshold": self.threshold_spin.value(),
-        }
+        config["vision"] = {**config["vision"], "match_threshold": self.threshold_spin.value()}
         config["sortie"] = {
             **config["sortie"],
             "formation": self.formation_combo.currentText(),
@@ -330,10 +354,7 @@ class MainWindow(QMainWindow):
             "stop_on_heavy_damage": self.stop_heavy_check.isChecked(),
             "retreat_on_medium_damage": self.retreat_medium_check.isChecked(),
         }
-        config["hotkeys"] = {
-            **config["hotkeys"],
-            "stop": self.stop_hotkey_edit.text().strip(),
-        }
+        config["hotkeys"] = {**config["hotkeys"], "stop": self.stop_hotkey_edit.text().strip()}
         config["preview"] = {
             **config["preview"],
             "enabled": self.preview_enabled_check.isChecked(),
@@ -393,12 +414,75 @@ class MainWindow(QMainWindow):
             screenshot = context.device.capture_game()
             self.last_screenshot = screenshot
             self.show_screenshot(screenshot)
+            self.maybe_update_page_match(context, screenshot)
             self.last_preview_error_at = 0.0
         except Exception as exc:
             now = time.monotonic()
             if now - self.last_preview_error_at > 3:
                 self.append_log(f"实时预览失败：{exc}")
                 self.last_preview_error_at = now
+
+    def maybe_update_page_match(self, context: RuntimeContext, screenshot: Screenshot, force: bool = False) -> None:
+        if context.page_matcher is None:
+            return
+        now = time.monotonic()
+        interval = context.page_matcher.monitor_interval_ms / 1000
+        if not force and now - self.last_page_match_at < interval:
+            return
+        self.last_page_match_at = now
+        self.current_page = context.page_matcher.match(screenshot.image)
+        self.update_page_panel(self.current_page)
+
+    def update_page_panel(self, page: PageMatch) -> None:
+        self.page_label.setText(f"当前页面：{page.name} ({page.key})")
+        self.page_detail_label.setText(
+            f"命中：{page.matched_count}/{page.required_count}  置信度：{page.score:.3f}  "
+            f"更新时间：{page.updated_at.strftime('%H:%M:%S')}"
+        )
+        detail_lines = []
+        for check in page.checks:
+            status = "OK" if check.matched else "MISS"
+            error = f" error={check.error}" if check.error else ""
+            detail_lines.append(
+                f"[{status}] {check.page_key}/{check.template} score={check.score:.3f} "
+                f"threshold={check.threshold:.2f}{error}"
+            )
+        self.match_detail_view.setPlainText("\n".join(detail_lines) or "没有模板详情。")
+        self.rebuild_action_buttons(page)
+
+    def rebuild_action_buttons(self, page: PageMatch) -> None:
+        while self.action_buttons_layout.count():
+            item = self.action_buttons_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        if not page.is_known or not page.actions:
+            self.action_buttons_layout.addWidget(QLabel("当前页面没有可用入口。"))
+            return
+        for action_key, action in page.actions.items():
+            name = str(action.get("name", action_key))
+            x = int(action.get("x", 0))
+            y = int(action.get("y", 0))
+            button = QPushButton(f"{name} ({x}, {y})")
+            button.clicked.connect(partial(self.click_page_action, action_key, action))
+            self.action_buttons_layout.addWidget(button)
+        self.action_buttons_layout.addStretch(1)
+
+    def click_page_action(self, action_key: str, action: dict[str, Any]) -> None:
+        if self.current_page is None or not self.current_page.is_known:
+            self.append_log("当前页面未知，入口点击已取消。")
+            return
+        try:
+            context = self.build_context(Event(), self.config_from_gui())
+            if self.last_screenshot is not None:
+                context.device.last_screenshot = self.last_screenshot
+            x = int(action.get("x", 0))
+            y = int(action.get("y", 0))
+            screen = context.device.click(x, y)
+            self.append_log(f"入口点击：{self.current_page.key}.{action_key} logical=({x},{y}) screen={screen}")
+        except Exception as exc:
+            self.append_log(f"入口点击失败：{exc}")
+            QMessageBox.warning(self, "入口点击失败", str(exc))
 
     def refresh_screenshot(self) -> None:
         try:
@@ -407,6 +491,7 @@ class MainWindow(QMainWindow):
             screenshot = context.device.capture_game()
             self.last_screenshot = screenshot
             self.show_screenshot(screenshot)
+            self.maybe_update_page_match(context, screenshot, force=True)
             selected = context.device.window_finder.last_title
             self.append_log(
                 "截图完成："
@@ -439,6 +524,7 @@ class MainWindow(QMainWindow):
             if context.device.last_screenshot is not None:
                 self.last_screenshot = context.device.last_screenshot
                 self.show_screenshot(context.device.last_screenshot)
+                self.maybe_update_page_match(context, context.device.last_screenshot, force=True)
             self.events.state_message.emit("状态：空闲")
         except Exception as exc:
             self.append_log(f"单步执行失败：{exc}")
@@ -485,8 +571,7 @@ class MainWindow(QMainWindow):
         logical_y = round((screen_y - source_region.top) * height / source_region.height)
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.Antialiasing)
-        pen = QPen(QColor(255, 64, 64), 2)
-        painter.setPen(pen)
+        painter.setPen(QPen(QColor(255, 64, 64), 2))
         painter.drawLine(logical_x - 18, logical_y, logical_x + 18, logical_y)
         painter.drawLine(logical_x, logical_y - 18, logical_x, logical_y + 18)
         painter.drawEllipse(logical_x - 10, logical_y - 10, 20, 20)

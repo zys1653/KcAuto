@@ -1,0 +1,45 @@
+monitor:
+  interval_ms: 500
+  unknown_threshold: 0.75
+
+pages:
+  home:
+    name: "母港"
+    min_matches: 1
+    templates:
+      - path: "home/sortie_button.png"
+        threshold: 0.86
+      - path: "home/resource_bar.png"
+        threshold: 0.82
+    actions:
+      sortie:
+        name: "出击"
+        x: 310
+        y: 560
+      supply:
+        name: "补给"
+        x: 120
+        y: 500
+      remodel:
+        name: "改装"
+        x: 470
+        y: 480
+
+  sortie_menu:
+    name: "出击菜单"
+    min_matches: 1
+    templates:
+      - path: "sortie/menu_title.png"
+        threshold: 0.86
+    actions:
+      sortie_start:
+        name: "开始出击"
+        x: 1020
+        y: 650
+
+  formation:
+    name: "阵型选择"
+    min_matches: 1
+    templates:
+      - path: "formation/title.png"
+        threshold: 0.86

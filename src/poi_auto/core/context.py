@@ -20,7 +20,8 @@ class RuntimeContext:
     stop_event: Event
     logger: LogCallback
     flags: dict[str, bool] = field(default_factory=dict)
+    page_matcher: Any | None = None
+    latest_page: Any | None = None
 
     def log(self, message: str) -> None:
         self.logger(message)
-

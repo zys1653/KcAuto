@@ -15,7 +15,10 @@ class SortieTask(BaseTask):
     def __init__(self, rules_path: Path) -> None:
         self.rules_path = rules_path
         self.rules = load_yaml(rules_path)
-        self.states = {state["name"] if "name" in state else name: state for name, state in self.rules.get("states", {}).items()}
+        self.states = {
+            state["name"] if "name" in state else name: state
+            for name, state in self.rules.get("states", {}).items()
+        }
         self.current_state = str(self.rules.get("initial_state", "home"))
         self.run_count = 0
 
@@ -35,9 +38,9 @@ class SortieTask(BaseTask):
         )
 
         detect_rule = state.get("detect", {"type": "always"})
-        match = context.recognizer.detect(screenshot.image, detect_rule, context.flags)
-        if not match.matched:
-            self._log_detection_failure(context, detect_rule, match)
+        matched, match_info = self._detect_state(context, screenshot.image, detect_rule)
+        if not matched:
+            self._log_detection_failure(context, detect_rule, match_info)
             return self._handle_fail(context, state)
 
         for action in state.get("actions", []):
@@ -52,6 +55,17 @@ class SortieTask(BaseTask):
             return False
         self.current_state = str(next_state)
         return True
+
+    def _detect_state(self, context: RuntimeContext, image: Any, detect_rule: dict[str, Any]) -> tuple[bool, Any]:
+        if detect_rule.get("type") == "page":
+            if context.page_matcher is None:
+                return False, "page_matcher_missing"
+            page_match = context.page_matcher.match(image)
+            context.latest_page = page_match
+            expected = str(detect_rule.get("page", ""))
+            return page_match.key == expected and page_match.matched, page_match
+        match = context.recognizer.detect(image, detect_rule, context.flags)
+        return match.matched, match
 
     def _run_action(self, context: RuntimeContext, action: dict[str, Any]) -> bool:
         action_type = action.get("type")
@@ -123,11 +137,16 @@ class SortieTask(BaseTask):
         return False
 
     def _log_detection_failure(self, context: RuntimeContext, rule: dict[str, Any], match: Any) -> None:
+        if rule.get("type") == "page":
+            page_key = getattr(match, "key", "unknown")
+            score = getattr(match, "score", 0.0)
+            context.log(f"页面识别失败：expected={rule.get('page')}, actual={page_key}, score={score:.3f}")
+            return
         template_path = getattr(match, "template_path", None)
         if template_path:
             context.log(f"识别失败：template={template_path}, score={match.score:.3f}")
         else:
-            context.log(f"识别失败：rule={rule}, score={match.score:.3f}")
+            context.log(f"识别失败：rule={rule}, score={getattr(match, 'score', 0.0):.3f}")
 
     def _wait(self, context: RuntimeContext, ms: int) -> None:
         end_at = time.monotonic() + max(ms, 0) / 1000

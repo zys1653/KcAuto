@@ -14,6 +14,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 class AppPaths:
     root: Path
     config: Path
+    pages: Path
     sortie_rules: Path
     templates: Path
     logs: Path
@@ -23,6 +24,7 @@ def default_paths() -> AppPaths:
     return AppPaths(
         root=PROJECT_ROOT,
         config=PROJECT_ROOT / "config" / "default.yaml",
+        pages=PROJECT_ROOT / "config" / "pages.yaml",
         sortie_rules=PROJECT_ROOT / "config" / "tasks" / "sortie.yaml",
         templates=PROJECT_ROOT / "assets" / "templates",
         logs=PROJECT_ROOT / "logs",
