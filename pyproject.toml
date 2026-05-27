@@ -1,0 +1,26 @@
+[project]
+name = "poi-auto"
+version = "0.1.0"
+description = "Windows image-recognition automation framework for Poi/Kantai Collection."
+readme = "docs/使用说明.md"
+requires-python = ">=3.11"
+dependencies = [
+    "PySide6>=6.7",
+    "PyYAML>=6.0",
+    "mss>=9.0",
+    "pywin32>=306; platform_system == 'Windows'",
+    "pyautogui>=0.9",
+    "opencv-python>=4.9",
+    "numpy>=1.26",
+]
+
+[project.scripts]
+poi-auto = "poi_auto.app.main:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+

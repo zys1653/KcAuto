@@ -1,0 +1,22 @@
+window:
+  title_keyword: "poi"
+
+game:
+  logical_width: 1200
+  logical_height: 720
+  crop_mode: "left_half"
+
+input:
+  click_delay_ms: 300
+  move_duration_ms: 0
+
+vision:
+  match_threshold: 0.86
+
+sortie:
+  enabled: true
+  formation: "line_ahead"
+  max_runs: 10
+  stop_on_heavy_damage: true
+  retreat_on_medium_damage: false
+
