@@ -18,6 +18,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QMessageBox,
     QPushButton,
@@ -25,6 +27,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSpinBox,
     QSplitter,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -38,6 +41,27 @@ from poi_auto.device.window import Rect, WindowFinder
 from poi_auto.tasks.sortie.task import SortieTask
 from poi_auto.vision.pages import PageMatch, PageMatcher
 from poi_auto.vision.recognizer import Recognizer
+
+
+TASKS = [
+    ("sortie", "出击"),
+    ("practice", "演习"),
+    ("expedition", "远征"),
+    ("supply", "补给"),
+    ("repair", "入渠"),
+]
+
+SECTIONS = TASKS + [("debug", "软件调试")]
+
+FORMATIONS = [
+    ("line_ahead", "单纵阵"),
+    ("double_line", "复纵阵"),
+    ("diamond", "轮形阵"),
+    ("echelon", "梯形阵"),
+    ("line_abreast", "单横阵"),
+]
+
+MAPS = [f"{world}-{area}" for world in range(1, 4) for area in range(1, 6)]
 
 
 class GuiEvents(QObject):
@@ -107,49 +131,15 @@ class MainWindow(QMainWindow):
         self.last_screenshot: Screenshot | None = None
         self.current_page: PageMatch | None = None
 
-        self.state_label = QLabel("状态：空闲")
-        self.image_label = QLabel("实时预览会显示 Poi 游戏画面")
-        self.image_label.setAlignment(Qt.AlignCenter)
-        self.image_label.setMinimumSize(720, 432)
-        self.image_label.setStyleSheet("QLabel { background: #15171a; color: #d6d8dc; border: 1px solid #30343b; }")
-
-        self.page_label = QLabel("当前页面：unknown")
-        self.page_detail_label = QLabel("命中：0/0  置信度：0.000")
-        self.match_detail_view = QPlainTextEdit()
-        self.match_detail_view.setReadOnly(True)
-        self.match_detail_view.setMaximumHeight(160)
-        self.action_buttons_widget = QWidget()
-        self.action_buttons_layout = QVBoxLayout(self.action_buttons_widget)
-        self.action_buttons_layout.setContentsMargins(0, 0, 0, 0)
-
-        self.log_view = QPlainTextEdit()
-        self.log_view.setReadOnly(True)
-
-        self._build_config_widgets()
-
-        self.refresh_button = QPushButton("刷新截图")
-        self.start_button = QPushButton("启动出击")
-        self.step_button = QPushButton("单步执行")
-        self.stop_button = QPushButton("停止")
-        self.stop_button.setEnabled(False)
-
-        self.refresh_button.clicked.connect(self.refresh_screenshot)
-        self.start_button.clicked.connect(self.start_sortie)
-        self.step_button.clicked.connect(self.step_sortie)
-        self.stop_button.clicked.connect(self.stop_task)
-        self.preview_enabled_check.toggled.connect(self.update_preview_timer)
-        self.preview_interval_spin.valueChanged.connect(self.update_preview_timer)
-
-        self.preview_timer = QTimer(self)
-        self.preview_timer.timeout.connect(self.refresh_preview_tick)
-
+        self._build_controls()
         self.setCentralWidget(self.build_layout())
         self.refresh_window_list()
         self.start_hotkey()
+        self.select_initial_section()
         self.update_preview_timer()
-        self.append_log("程序已启动。页面监控会读取 config/pages.yaml 并匹配当前截图。")
+        self.append_log("程序已启动。右侧保持实时截图和日志，调试项已移动到软件调试。")
 
-    def _build_config_widgets(self) -> None:
+    def _build_controls(self) -> None:
         window = self.config.get("window", {})
         game = self.config.get("game", {})
         input_config = self.config.get("input", {})
@@ -157,6 +147,48 @@ class MainWindow(QMainWindow):
         sortie = self.config.get("sortie", {})
         hotkeys = self.config.get("hotkeys", {})
         preview = self.config.get("preview", {})
+
+        self.task_combo = QComboBox()
+        for task_id, label in TASKS:
+            self.task_combo.addItem(label, task_id)
+        self._set_combo_data(self.task_combo, self.config.get("task", {}).get("selected", "sortie"))
+
+        self.start_button = QPushButton("启动任务")
+        self.stop_button = QPushButton("停止任务")
+        self.stop_button.setEnabled(False)
+        self.state_label = QLabel("状态：空闲")
+        self.start_button.clicked.connect(self.start_selected_task)
+        self.stop_button.clicked.connect(self.stop_task)
+
+        self.nav_list = QListWidget()
+        self.nav_list.setFixedWidth(140)
+        for section_id, label in SECTIONS:
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, section_id)
+            self.nav_list.addItem(item)
+        self.nav_list.currentRowChanged.connect(self.switch_section)
+
+        self.stack = QStackedWidget()
+
+        self.image_label = QLabel("实时预览会显示 Poi 游戏画面")
+        self.image_label.setAlignment(Qt.AlignCenter)
+        self.image_label.setMinimumSize(640, 384)
+        self.image_label.setStyleSheet("QLabel { background: #15171a; color: #d6d8dc; border: 1px solid #30343b; }")
+        self.log_view = QPlainTextEdit()
+        self.log_view.setReadOnly(True)
+
+        self.sortie_map_combo = QComboBox()
+        self.sortie_map_combo.addItems(MAPS)
+        self.sortie_map_combo.setCurrentText(str(sortie.get("map", "1-1")))
+        self.formation_combo = QComboBox()
+        for key, label in FORMATIONS:
+            self.formation_combo.addItem(label, key)
+        self._set_combo_data(self.formation_combo, sortie.get("formation", "line_ahead"))
+        self.stop_heavy_check = QCheckBox("大破撤退")
+        self.stop_heavy_check.setChecked(bool(sortie.get("stop_on_heavy_damage", True)))
+        self.max_battles_spin = self._spin(1, 20, int(sortie.get("max_battles", 6)))
+        self.save_sortie_button = QPushButton("保存出击设置")
+        self.save_sortie_button.clicked.connect(self.save_config_from_gui)
 
         self.title_keyword_edit = QLineEdit(str(window.get("title_keyword", "poi")))
         self.target_window_combo = QComboBox()
@@ -174,33 +206,39 @@ class MainWindow(QMainWindow):
         self.capture_height_spin = self._spin(100, 5000, int(game.get("capture_height", 720)))
         self.offset_x_spin = self._spin(-2000, 2000, int(game.get("offset_x", 0)))
         self.offset_y_spin = self._spin(-2000, 2000, int(game.get("offset_y", 0)))
-
         self.click_delay_spin = self._spin(0, 10000, int(input_config.get("click_delay_ms", 300)))
         self.move_duration_spin = self._spin(0, 5000, int(input_config.get("move_duration_ms", 0)))
-
         self.threshold_spin = QDoubleSpinBox()
         self.threshold_spin.setRange(0.1, 1.0)
         self.threshold_spin.setDecimals(2)
         self.threshold_spin.setSingleStep(0.01)
         self.threshold_spin.setValue(float(vision.get("match_threshold", 0.86)))
 
-        self.formation_combo = QComboBox()
-        self.formation_combo.addItems(["line_ahead", "double_line", "diamond", "echelon", "line_abreast"])
-        self.formation_combo.setCurrentText(str(sortie.get("formation", "line_ahead")))
-        self.max_runs_spin = self._spin(1, 999, int(sortie.get("max_runs", 10)))
-        self.stop_heavy_check = QCheckBox("大破停止")
-        self.stop_heavy_check.setChecked(bool(sortie.get("stop_on_heavy_damage", True)))
-        self.retreat_medium_check = QCheckBox("中破撤退")
-        self.retreat_medium_check.setChecked(bool(sortie.get("retreat_on_medium_damage", False)))
-
-        self.stop_hotkey_edit = QLineEdit(str(hotkeys.get("stop", "Ctrl+Shift+S")))
         self.preview_enabled_check = QCheckBox("实时预览")
         self.preview_enabled_check.setChecked(bool(preview.get("enabled", True)))
         self.preview_show_mouse_check = QCheckBox("突出鼠标位置")
         self.preview_show_mouse_check.setChecked(bool(preview.get("show_mouse", True)))
         self.preview_interval_spin = self._spin(50, 5000, int(preview.get("interval_ms", 200)))
-        self.save_config_button = QPushButton("保存配置")
-        self.save_config_button.clicked.connect(self.save_config_from_gui)
+        self.preview_enabled_check.toggled.connect(self.update_preview_timer)
+        self.preview_interval_spin.valueChanged.connect(self.update_preview_timer)
+
+        self.stop_hotkey_edit = QLineEdit(str(hotkeys.get("stop", "Ctrl+Shift+S")))
+        self.save_debug_button = QPushButton("保存调试设置")
+        self.save_debug_button.clicked.connect(self.save_config_from_gui)
+        self.refresh_screenshot_button = QPushButton("立即刷新截图")
+        self.refresh_screenshot_button.clicked.connect(self.refresh_screenshot)
+
+        self.page_label = QLabel("当前页面：unknown")
+        self.page_detail_label = QLabel("命中：0/0  置信度：0.000")
+        self.match_detail_view = QPlainTextEdit()
+        self.match_detail_view.setReadOnly(True)
+        self.match_detail_view.setMaximumHeight(160)
+        self.action_buttons_widget = QWidget()
+        self.action_buttons_layout = QVBoxLayout(self.action_buttons_widget)
+        self.action_buttons_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.preview_timer = QTimer(self)
+        self.preview_timer.timeout.connect(self.refresh_preview_tick)
 
     def _spin(self, minimum: int, maximum: int, value: int) -> QSpinBox:
         spin = QSpinBox()
@@ -208,41 +246,65 @@ class MainWindow(QMainWindow):
         spin.setValue(value)
         return spin
 
+    def _set_combo_data(self, combo: QComboBox, value: Any) -> None:
+        for index in range(combo.count()):
+            if combo.itemData(index) == value or combo.itemText(index) == value:
+                combo.setCurrentIndex(index)
+                return
+
     def build_layout(self) -> QWidget:
         root = QWidget()
         root_layout = QVBoxLayout(root)
 
-        toolbar = QHBoxLayout()
-        toolbar.addWidget(self.refresh_button)
-        toolbar.addWidget(self.start_button)
-        toolbar.addWidget(self.step_button)
-        toolbar.addWidget(self.stop_button)
-        toolbar.addStretch(1)
-        toolbar.addWidget(self.state_label)
-        root_layout.addLayout(toolbar)
+        task_bar = QHBoxLayout()
+        task_bar.addWidget(QLabel("任务"))
+        task_bar.addWidget(self.task_combo)
+        task_bar.addWidget(self.start_button)
+        task_bar.addWidget(self.stop_button)
+        task_bar.addStretch(1)
+        task_bar.addWidget(self.state_label)
+        root_layout.addLayout(task_bar)
 
-        splitter = QSplitter(Qt.Horizontal)
-        left = QWidget()
-        left_layout = QVBoxLayout(left)
-        left_layout.addWidget(self.build_config_panel())
-        left_layout.addWidget(QLabel("运行日志"))
-        left_layout.addWidget(self.log_view, 1)
+        self.stack.addWidget(self.build_sortie_page())
+        self.stack.addWidget(self.build_placeholder_page("演习"))
+        self.stack.addWidget(self.build_placeholder_page("远征"))
+        self.stack.addWidget(self.build_placeholder_page("补给"))
+        self.stack.addWidget(self.build_placeholder_page("入渠"))
+        self.stack.addWidget(self.build_debug_page())
 
-        right = QWidget()
-        right_layout = QVBoxLayout(right)
-        right_layout.addWidget(QLabel("游戏截图预览"))
-        right_layout.addWidget(self.image_label, 1)
-        right_layout.addWidget(self.build_page_panel())
-
-        splitter.addWidget(left)
-        splitter.addWidget(right)
-        splitter.setSizes([460, 720])
-        root_layout.addWidget(splitter, 1)
+        center = QSplitter(Qt.Horizontal)
+        center.addWidget(self.nav_list)
+        center.addWidget(self.stack)
+        center.addWidget(self.build_right_panel())
+        center.setSizes([140, 430, 680])
+        root_layout.addWidget(center, 1)
         return root
 
-    def build_config_panel(self) -> QWidget:
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
+    def build_sortie_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        group = QGroupBox("出击设置")
+        form = QFormLayout(group)
+        form.addRow("出击海域", self.sortie_map_combo)
+        form.addRow("阵型选择", self.formation_combo)
+        form.addRow("最大战斗次数", self.max_battles_spin)
+        form.addRow("", self.stop_heavy_check)
+        layout.addWidget(group)
+        layout.addWidget(self.save_sortie_button)
+        layout.addStretch(1)
+        return page
+
+    def build_placeholder_page(self, title: str) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        label = QLabel(f"{title} 设置页预留")
+        label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(label, 1)
+        return page
+
+    def build_debug_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
 
         window_group = QGroupBox("目标窗口")
         window_form = QFormLayout(window_group)
@@ -251,54 +313,72 @@ class MainWindow(QMainWindow):
         window_form.addRow("", self.refresh_windows_button)
         window_form.addRow("", self.exclude_own_check)
 
-        game_group = QGroupBox("画面与输入")
-        game_form = QFormLayout(game_group)
-        game_form.addRow("截图模式", self.crop_mode_combo)
-        game_form.addRow("逻辑宽度", self.logical_width_spin)
-        game_form.addRow("逻辑高度", self.logical_height_spin)
-        game_form.addRow("截图宽度", self.capture_width_spin)
-        game_form.addRow("截图高度", self.capture_height_spin)
-        game_form.addRow("水平偏移", self.offset_x_spin)
-        game_form.addRow("垂直偏移", self.offset_y_spin)
-        game_form.addRow("点击延迟 ms", self.click_delay_spin)
-        game_form.addRow("移动耗时 ms", self.move_duration_spin)
-        game_form.addRow("匹配阈值", self.threshold_spin)
+        capture_group = QGroupBox("截图与输入")
+        capture_form = QFormLayout(capture_group)
+        capture_form.addRow("截图模式", self.crop_mode_combo)
+        capture_form.addRow("逻辑宽度", self.logical_width_spin)
+        capture_form.addRow("逻辑高度", self.logical_height_spin)
+        capture_form.addRow("截图宽度", self.capture_width_spin)
+        capture_form.addRow("截图高度", self.capture_height_spin)
+        capture_form.addRow("水平偏移", self.offset_x_spin)
+        capture_form.addRow("垂直偏移", self.offset_y_spin)
+        capture_form.addRow("点击延迟 ms", self.click_delay_spin)
+        capture_form.addRow("移动耗时 ms", self.move_duration_spin)
+        capture_form.addRow("匹配阈值", self.threshold_spin)
 
-        preview_group = QGroupBox("预览")
+        preview_group = QGroupBox("预览与热键")
         preview_form = QFormLayout(preview_group)
         preview_form.addRow("", self.preview_enabled_check)
         preview_form.addRow("", self.preview_show_mouse_check)
         preview_form.addRow("刷新间隔 ms", self.preview_interval_spin)
+        preview_form.addRow("停止快捷键", self.stop_hotkey_edit)
 
-        sortie_group = QGroupBox("出击")
-        sortie_form = QFormLayout(sortie_group)
-        sortie_form.addRow("阵型", self.formation_combo)
-        sortie_form.addRow("最大轮次", self.max_runs_spin)
-        sortie_form.addRow("", self.stop_heavy_check)
-        sortie_form.addRow("", self.retreat_medium_check)
-        sortie_form.addRow("停止快捷键", self.stop_hotkey_edit)
-
-        layout.addWidget(window_group)
-        layout.addWidget(game_group)
-        layout.addWidget(preview_group)
-        layout.addWidget(sortie_group)
-        layout.addWidget(self.save_config_button)
-        return panel
-
-    def build_page_panel(self) -> QWidget:
-        group = QGroupBox("页面识别")
-        layout = QVBoxLayout(group)
-        layout.addWidget(self.page_label)
-        layout.addWidget(self.page_detail_label)
-        layout.addWidget(QLabel("模板详情"))
-        layout.addWidget(self.match_detail_view)
-        layout.addWidget(QLabel("当前页面功能入口"))
+        page_group = QGroupBox("页面识别")
+        page_layout = QVBoxLayout(page_group)
+        page_layout.addWidget(self.page_label)
+        page_layout.addWidget(self.page_detail_label)
+        page_layout.addWidget(QLabel("模板详情"))
+        page_layout.addWidget(self.match_detail_view)
+        page_layout.addWidget(QLabel("当前页面功能入口"))
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setWidget(self.action_buttons_widget)
         scroll.setMaximumHeight(120)
-        layout.addWidget(scroll)
-        return group
+        page_layout.addWidget(scroll)
+
+        layout.addWidget(window_group)
+        layout.addWidget(capture_group)
+        layout.addWidget(preview_group)
+        layout.addWidget(self.refresh_screenshot_button)
+        layout.addWidget(page_group)
+        layout.addWidget(self.save_debug_button)
+        layout.addStretch(1)
+        return page
+
+    def build_right_panel(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.addWidget(QLabel("实时截图"))
+        layout.addWidget(self.image_label, 3)
+        layout.addWidget(QLabel("日志"))
+        layout.addWidget(self.log_view, 2)
+        return panel
+
+    def select_initial_section(self) -> None:
+        active = self.config.get("ui", {}).get("active_section", "sortie")
+        for row in range(self.nav_list.count()):
+            if self.nav_list.item(row).data(Qt.UserRole) == active:
+                self.nav_list.setCurrentRow(row)
+                return
+        self.nav_list.setCurrentRow(0)
+
+    def switch_section(self, row: int) -> None:
+        if row < 0:
+            return
+        self.stack.setCurrentIndex(row)
+        item = self.nav_list.item(row)
+        if item is not None:
+            self.config.setdefault("ui", {})["active_section"] = item.data(Qt.UserRole)
 
     def build_context(self, stop_event: Event, config: dict[str, Any] | None = None) -> RuntimeContext:
         if config is None:
@@ -323,8 +403,12 @@ class MainWindow(QMainWindow):
     def config_from_gui(self) -> dict[str, Any]:
         selected_title = self.target_window_combo.currentData() or ""
         config = dict(self.config)
-        for key in ("window", "game", "input", "vision", "sortie", "hotkeys", "preview"):
+        for key in ("window", "game", "input", "vision", "sortie", "hotkeys", "preview", "ui", "task"):
             config.setdefault(key, {})
+        config["task"] = {**config["task"], "selected": self.task_combo.currentData()}
+        current_item = self.nav_list.currentItem()
+        if current_item is not None:
+            config["ui"] = {**config["ui"], "active_section": current_item.data(Qt.UserRole)}
         config["window"] = {
             **config["window"],
             "title_keyword": self.title_keyword_edit.text().strip(),
@@ -349,10 +433,10 @@ class MainWindow(QMainWindow):
         config["vision"] = {**config["vision"], "match_threshold": self.threshold_spin.value()}
         config["sortie"] = {
             **config["sortie"],
-            "formation": self.formation_combo.currentText(),
-            "max_runs": self.max_runs_spin.value(),
+            "map": self.sortie_map_combo.currentText(),
+            "formation": self.formation_combo.currentData(),
+            "max_battles": self.max_battles_spin.value(),
             "stop_on_heavy_damage": self.stop_heavy_check.isChecked(),
-            "retreat_on_medium_damage": self.retreat_medium_check.isChecked(),
         }
         config["hotkeys"] = {**config["hotkeys"], "stop": self.stop_hotkey_edit.text().strip()}
         config["preview"] = {
@@ -390,8 +474,7 @@ class MainWindow(QMainWindow):
     def save_config_from_gui(self) -> None:
         self.config = self.config_from_gui()
         save_yaml(self.paths.config, self.config)
-        selected_title = self.config.get("window", {}).get("selected_title", "")
-        self.append_log(f"配置已保存：目标窗口={selected_title or '按关键字自动匹配'}")
+        self.append_log("配置已保存。")
         self.start_hotkey()
         self.update_preview_timer()
 
@@ -400,13 +483,36 @@ class MainWindow(QMainWindow):
         ok, message = self.hotkey.start(hotkey)
         self.append_log(message)
         if not ok:
-            self.append_log("仍可使用界面上的“停止”按钮停止任务。")
+            self.append_log("仍可使用界面上的停止按钮停止任务。")
 
     def update_preview_timer(self) -> None:
         if self.preview_enabled_check.isChecked():
             self.preview_timer.start(self.preview_interval_spin.value())
         else:
             self.preview_timer.stop()
+
+    def start_selected_task(self) -> None:
+        self.save_config_from_gui()
+        task_id = self.task_combo.currentData()
+        if task_id != "sortie":
+            self.append_log(f"任务暂未实现：{self.task_combo.currentText()}")
+            return
+        if not self.runner.start(SortieTask(self.paths.sortie_rules)):
+            self.append_log("任务已在运行。")
+            return
+        self.start_button.setEnabled(False)
+        self.stop_button.setEnabled(True)
+        self.state_label.setText("状态：出击运行中")
+
+    def stop_task(self) -> None:
+        if self.runner.is_running:
+            self.runner.stop()
+            self.append_log("已请求停止任务。")
+        else:
+            self.append_log("当前没有运行中的任务。")
+        self.start_button.setEnabled(True)
+        self.stop_button.setEnabled(False)
+        self.state_label.setText("状态：停止中")
 
     def refresh_preview_tick(self) -> None:
         try:
@@ -421,6 +527,26 @@ class MainWindow(QMainWindow):
             if now - self.last_preview_error_at > 3:
                 self.append_log(f"实时预览失败：{exc}")
                 self.last_preview_error_at = now
+
+    def refresh_screenshot(self) -> None:
+        try:
+            self.save_config_from_gui()
+            context = self.build_context(Event())
+            screenshot = context.device.capture_game()
+            self.last_screenshot = screenshot
+            self.show_screenshot(screenshot)
+            self.maybe_update_page_match(context, screenshot, force=True)
+            selected = context.device.window_finder.last_title
+            self.append_log(
+                "截图完成："
+                f"window={selected}, "
+                f"region=({screenshot.source_region.left},{screenshot.source_region.top},"
+                f"{screenshot.source_region.width}x{screenshot.source_region.height}), "
+                f"scale=({screenshot.scale_x:.3f},{screenshot.scale_y:.3f})"
+            )
+        except Exception as exc:
+            self.append_log(f"截图失败：{exc}")
+            QMessageBox.warning(self, "截图失败", str(exc))
 
     def maybe_update_page_match(self, context: RuntimeContext, screenshot: Screenshot, force: bool = False) -> None:
         if context.page_matcher is None:
@@ -484,62 +610,6 @@ class MainWindow(QMainWindow):
             self.append_log(f"入口点击失败：{exc}")
             QMessageBox.warning(self, "入口点击失败", str(exc))
 
-    def refresh_screenshot(self) -> None:
-        try:
-            self.save_config_from_gui()
-            context = self.build_context(Event())
-            screenshot = context.device.capture_game()
-            self.last_screenshot = screenshot
-            self.show_screenshot(screenshot)
-            self.maybe_update_page_match(context, screenshot, force=True)
-            selected = context.device.window_finder.last_title
-            self.append_log(
-                "截图完成："
-                f"window={selected}, "
-                f"region=({screenshot.source_region.left},{screenshot.source_region.top},"
-                f"{screenshot.source_region.width}x{screenshot.source_region.height}), "
-                f"scale=({screenshot.scale_x:.3f},{screenshot.scale_y:.3f})"
-            )
-        except Exception as exc:
-            self.append_log(f"截图失败：{exc}")
-            QMessageBox.warning(self, "截图失败", str(exc))
-
-    def start_sortie(self) -> None:
-        self.save_config_from_gui()
-        task = SortieTask(self.paths.sortie_rules)
-        if not self.runner.start(task):
-            self.append_log("任务已在运行。")
-            return
-        self.start_button.setEnabled(False)
-        self.stop_button.setEnabled(True)
-        self.events.state_message.emit("状态：出击运行中")
-
-    def step_sortie(self) -> None:
-        try:
-            self.save_config_from_gui()
-            context = self.build_context(Event())
-            task = SortieTask(self.paths.sortie_rules)
-            self.events.state_message.emit("状态：单步执行")
-            task.step(context)
-            if context.device.last_screenshot is not None:
-                self.last_screenshot = context.device.last_screenshot
-                self.show_screenshot(context.device.last_screenshot)
-                self.maybe_update_page_match(context, context.device.last_screenshot, force=True)
-            self.events.state_message.emit("状态：空闲")
-        except Exception as exc:
-            self.append_log(f"单步执行失败：{exc}")
-            QMessageBox.warning(self, "单步执行失败", str(exc))
-
-    def stop_task(self) -> None:
-        if self.runner.is_running:
-            self.runner.stop()
-            self.append_log("已请求停止任务。")
-        else:
-            self.append_log("当前没有运行中的任务。")
-        self.start_button.setEnabled(True)
-        self.stop_button.setEnabled(False)
-        self.events.state_message.emit("状态：停止中")
-
     def show_screenshot(self, screenshot_or_image: object) -> None:
         if isinstance(screenshot_or_image, Screenshot):
             image = screenshot_or_image.image
@@ -602,9 +672,6 @@ class MainWindow(QMainWindow):
 
     def state_label_set(self, message: str) -> None:
         self.state_label.setText(message)
-        if "结束" in message or "空闲" in message:
-            self.start_button.setEnabled(True)
-            self.stop_button.setEnabled(False)
 
     def closeEvent(self, event: Any) -> None:
         self.preview_timer.stop()

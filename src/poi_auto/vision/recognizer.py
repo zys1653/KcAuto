@@ -65,7 +65,8 @@ class Recognizer:
                 return MatchResult(False, 0.0, template_path=template_path, error="invalid_region")
             source = source[offset_y : offset_y + height, offset_x : offset_x + width]
 
-        tpl = cv2.imread(str(template_path), cv2.IMREAD_COLOR)
+        tpl_bytes = np.fromfile(template_path, dtype=np.uint8)
+        tpl = cv2.imdecode(tpl_bytes, cv2.IMREAD_COLOR)
         if tpl is None:
             return MatchResult(False, 0.0, template_path=template_path, error="unreadable_template")
         if source.shape[0] < tpl.shape[0] or source.shape[1] < tpl.shape[1]:

@@ -5,7 +5,7 @@ monitor:
 pages:
   home:
     name: "母港"
-    min_matches: 1
+    min_matches: 2
     templates:
       - path: "home/sortie_button.png"
         threshold: 0.86
@@ -14,16 +14,16 @@ pages:
     actions:
       sortie:
         name: "出击"
-        x: 310
-        y: 560
+        x: 327
+        y: 401
       supply:
         name: "补给"
-        x: 120
-        y: 500
+        x: 115
+        y: 346
       remodel:
         name: "改装"
-        x: 470
-        y: 480
+        x: 462
+        y: 317
 
   sortie_menu:
     name: "出击菜单"
@@ -33,13 +33,73 @@ pages:
         threshold: 0.86
     actions:
       sortie_start:
-        name: "开始出击"
-        x: 1020
-        y: 650
+        name: "出击"
+        x: 336
+        y: 317
+      manoeuvre:
+        name: "演习"
+        x: 680
+        y: 320
+
+  map_1_a:
+    name: "地图1普通选关"
+    min_matches: 3
+    templates:
+      - path: "sortie/fight_menu_1_a.png"
+        threshold: 0.86
+      - path: "sortie/fight_menu_1_b.png"
+        threshold: 0.82
+      - path: "sortie/fight_menu_1_c.png"
+        threshold: 0.82
+    actions:
+      sortie_start_1-1:
+        name: "1-1"
+        x: 405
+        y: 298
+        
+  sortie_confirm:
+    name: "出击决定"
+    min_matches: 2
+    templates:
+      - path: "sortie/sortie_confirm_1.png"
+        threshold: 0.40
+      - path: "sortie/sortie_confirm_2.png"
+        threshold: 0.50
+      - path: "sortie/sortie_confirm_3.png"
+        threshold: 0.86
+
+    actions:
+      sortie_start:
+        name: "决定"
+        x: 997
+        y: 656
 
   formation:
     name: "阵型选择"
     min_matches: 1
     templates:
-      - path: "formation/title.png"
+      - path: "formation/choose1.png"
+        threshold: 0.86
+      - path: "formation/choose2.png"
+        threshold: 0.86
+
+  battle:
+    name: "战斗中"
+    min_matches: 1
+    templates:
+      - path: "battle/battle.png"
+        threshold: 0.86
+
+  battle_result:
+    name: "战斗结果"
+    min_matches: 1
+    templates:
+      - path: "battle/result.png"
+        threshold: 0.86
+
+  advance_or_retreat:
+    name: "进击/撤退"
+    min_matches: 1
+    templates:
+      - path: "battle/advance_or_retreat.png"
         threshold: 0.86

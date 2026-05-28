@@ -2,8 +2,12 @@ window:
   title_keyword: p
   selected_title: poi
   exclude_own_process: true
+ui:
+  active_section: debug
+task:
+  selected: sortie
 game:
-  logical_width: 1200
+  logical_width: 1195
   logical_height: 720
   capture_width: 1200
   capture_height: 720
@@ -17,13 +21,15 @@ vision:
   match_threshold: 0.86
 sortie:
   enabled: true
+  map: 1-1
   formation: line_ahead
   max_runs: 10
+  max_battles: 6
   stop_on_heavy_damage: true
   retreat_on_medium_damage: true
 hotkeys:
   stop: z
 preview:
   enabled: true
-  interval_ms: 200
+  interval_ms: 100
   show_mouse: true
