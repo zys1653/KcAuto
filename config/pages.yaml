@@ -40,8 +40,12 @@ pages:
         name: "演习"
         x: 680
         y: 320
+      expedition:
+        name: "远征"
+        x: 930
+        y: 320
 
-  map_1_a:
+  map_select_1:
     name: "地图1普通选关"
     min_matches: 3
     templates:
@@ -52,11 +56,27 @@ pages:
       - path: "sortie/fight_menu_1_c.png"
         threshold: 0.82
     actions:
-      sortie_start_1-1:
+      map_1_1:
         name: "1-1"
         x: 405
         y: 298
-        
+      map_1_2:
+        name: "1-2"
+        x: 520
+        y: 298
+      map_1_3:
+        name: "1-3"
+        x: 635
+        y: 298
+      map_1_4:
+        name: "1-4"
+        x: 750
+        y: 298
+      map_1_5:
+        name: "1-5"
+        x: 865
+        y: 298
+
   sortie_confirm:
     name: "出击决定"
     min_matches: 2
@@ -67,12 +87,35 @@ pages:
         threshold: 0.50
       - path: "sortie/sortie_confirm_3.png"
         threshold: 0.86
-
     actions:
-      sortie_start:
+      decide:
         name: "决定"
         x: 997
         y: 656
+
+  sortie_start:
+    name: "出击开始"
+    min_matches: 1
+    templates:
+      - path: "sortie/start.png"
+        threshold: 0.86
+    actions:
+      start:
+        name: "出击开始"
+        x: 997
+        y: 656
+
+  compass:
+    name: "罗盘"
+    min_matches: 1
+    templates:
+      - path: "map/compass.png"
+        threshold: 0.86
+    actions:
+      spin:
+        name: "转罗盘"
+        x: 600
+        y: 360
 
   formation:
     name: "阵型选择"
@@ -82,6 +125,27 @@ pages:
         threshold: 0.86
       - path: "formation/choose2.png"
         threshold: 0.86
+    actions:
+      line_ahead:
+        name: "单纵阵"
+        x: 648
+        y: 279
+      double_line:
+        name: "复纵阵"
+        x: 860
+        y: 279
+      diamond:
+        name: "轮形阵"
+        x: 1060
+        y: 275
+      echelon:
+        name: "梯形阵"
+        x: 777
+        y: 510
+      line_abreast:
+        name: "单横阵"
+        x: 974
+        y: 518
 
   battle:
     name: "战斗中"
@@ -90,12 +154,57 @@ pages:
       - path: "battle/battle.png"
         threshold: 0.86
 
+  night_battle:
+    name: "夜战突入"
+    min_matches: 1
+    templates:
+      - path: "battle/night_battle.png"
+        threshold: 0.86
+    actions:
+      enter:
+        name: "突入"
+        x: 790
+        y: 600
+      decline:
+        name: "不突入"
+        x: 410
+        y: 600
+
   battle_result:
-    name: "战斗结果"
+    name: "战斗评价"
     min_matches: 1
     templates:
       - path: "battle/result.png"
         threshold: 0.86
+    actions:
+      continue:
+        name: "继续"
+        x: 820
+        y: 680
+
+  exp_gain:
+    name: "经验结算"
+    min_matches: 1
+    templates:
+      - path: "battle/exp_gain.png"
+        threshold: 0.86
+    actions:
+      continue:
+        name: "继续"
+        x: 820
+        y: 680
+
+  new_ship:
+    name: "获得新船"
+    min_matches: 1
+    templates:
+      - path: "battle/new_ship.png"
+        threshold: 0.86
+    actions:
+      continue:
+        name: "继续"
+        x: 820
+        y: 680
 
   advance_or_retreat:
     name: "进击/撤退"
@@ -103,3 +212,36 @@ pages:
     templates:
       - path: "battle/advance_or_retreat.png"
         threshold: 0.86
+    actions:
+      proceed:
+        name: "进击"
+        x: 790
+        y: 600
+      retreat:
+        name: "撤退"
+        x: 410
+        y: 600
+
+  resource_node:
+    name: "补给点"
+    min_matches: 1
+    templates:
+      - path: "map/resource_node.png"
+        threshold: 0.86
+    actions:
+      continue:
+        name: "继续"
+        x: 820
+        y: 680
+
+  return_home:
+    name: "回港"
+    min_matches: 1
+    templates:
+      - path: "map/return_home.png"
+        threshold: 0.86
+    actions:
+      continue:
+        name: "继续"
+        x: 820
+        y: 680

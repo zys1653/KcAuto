@@ -208,6 +208,8 @@ class MainWindow(QMainWindow):
         self._set_combo_data(self.formation_combo, sortie.get("formation", "line_ahead"))
         self.stop_heavy_check = QCheckBox("大破撤退")
         self.stop_heavy_check.setChecked(bool(sortie.get("stop_on_heavy_damage", True)))
+        self.hp_ocr_check = QCheckBox("记录 HP OCR")
+        self.hp_ocr_check.setChecked(bool(sortie.get("hp_ocr_enabled", True)))
         self.max_battles_spin = self._spin(1, 20, int(sortie.get("max_battles", 6)))
         self.save_sortie_button = QPushButton("保存出击设置")
         self.save_sortie_button.clicked.connect(self.save_config_from_gui)
@@ -312,6 +314,7 @@ class MainWindow(QMainWindow):
         form.addRow("阵型选择", self.formation_combo)
         form.addRow("最大战斗次数", self.max_battles_spin)
         form.addRow("", self.stop_heavy_check)
+        form.addRow("", self.hp_ocr_check)
         layout.addWidget(group)
         layout.addWidget(self.save_sortie_button)
         layout.addStretch(1)
@@ -461,6 +464,7 @@ class MainWindow(QMainWindow):
             "formation": self.formation_combo.currentData(),
             "max_battles": self.max_battles_spin.value(),
             "stop_on_heavy_damage": self.stop_heavy_check.isChecked(),
+            "hp_ocr_enabled": self.hp_ocr_check.isChecked(),
         }
         config["hotkeys"] = {**config["hotkeys"], "stop": self.stop_hotkey_edit.text().strip()}
         config["preview"] = {

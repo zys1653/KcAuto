@@ -27,6 +27,7 @@ sortie:
   max_battles: 6
   stop_on_heavy_damage: true
   retreat_on_medium_damage: true
+  hp_ocr_enabled: true
 hotkeys:
   stop: z
 preview:
