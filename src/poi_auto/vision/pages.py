@@ -18,6 +18,7 @@ class TemplateCheck:
     matched: bool
     score: float
     threshold: float
+    required: bool = False
     path: Path | None = None
     error: str = ""
 
@@ -93,16 +94,19 @@ class PageMatcher:
                 continue
             template_path = str(template_rule.get("path", ""))
             threshold = float(template_rule.get("threshold", self.recognizer.default_threshold))
+            required = bool(template_rule.get("required", False))
             result = self.recognizer.match_template(
                 image=image,
                 template=Path("pages") / template_path,
                 threshold=threshold,
                 region=template_rule.get("region"),
             )
-            checks.append(self._check_from_result(page_key, template_path, threshold, result))
+            checks.append(self._check_from_result(page_key, template_path, threshold, required, result))
 
         matched_checks = [item for item in checks if item.matched]
-        matched = bool(checks) and len(matched_checks) >= min_matches
+        required_checks = [item for item in checks if item.required]
+        required_matched = all(item.matched for item in required_checks)
+        matched = bool(checks) and len(matched_checks) >= min_matches and required_matched
         score = sum(item.score for item in matched_checks) / len(matched_checks) if matched_checks else 0.0
         return PageMatch(
             key=page_key,
@@ -120,6 +124,7 @@ class PageMatcher:
         page_key: str,
         template: str,
         threshold: float,
+        required: bool,
         result: MatchResult,
     ) -> TemplateCheck:
         return TemplateCheck(
@@ -128,6 +133,7 @@ class PageMatcher:
             matched=result.matched,
             score=result.score,
             threshold=threshold,
+            required=required,
             path=result.template_path,
             error=result.error,
         )

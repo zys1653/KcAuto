@@ -662,8 +662,9 @@ class MainWindow(QMainWindow):
         for check in page.checks:
             status = "OK" if check.matched else "MISS"
             error = f" error={check.error}" if check.error else ""
+            required = " required" if check.required else ""
             detail_lines.append(
-                f"[{status}] {check.page_key}/{check.template} score={check.score:.3f} "
+                f"[{status}] {check.page_key}/{check.template}{required} score={check.score:.3f} "
                 f"threshold={check.threshold:.2f}{error}"
             )
         self.match_detail_view.setPlainText("\n".join(detail_lines) or "没有模板详情。")
