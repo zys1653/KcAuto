@@ -69,7 +69,6 @@ MAPS = [f"{world}-{area}" for world in range(1, 4) for area in range(1, 6)]
 @dataclass(frozen=True)
 class PreviewResult:
     screenshot: Screenshot
-    page: PageMatch | None
 
 
 class GuiEvents(QObject):
@@ -78,6 +77,8 @@ class GuiEvents(QObject):
     stop_requested = Signal()
     preview_result = Signal(object)
     preview_error = Signal(str)
+    page_match_result = Signal(object)
+    page_match_error = Signal(str)
 
 
 class GlobalHotkey:
@@ -136,12 +137,18 @@ class MainWindow(QMainWindow):
         self.events.stop_requested.connect(self.stop_task)
         self.events.preview_result.connect(self.apply_preview_result)
         self.events.preview_error.connect(self.handle_preview_error)
+        self.events.page_match_result.connect(self.apply_page_match_result)
+        self.events.page_match_error.connect(self.handle_page_match_error)
         self.runner = TaskRunner(self.build_context)
         self.hotkey = GlobalHotkey(lambda: self.events.stop_requested.emit())
         self.preview_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="poi-preview")
+        self.page_match_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="poi-page")
         self.preview_future: Future | None = None
+        self.page_match_future: Future | None = None
         self.preview_context: RuntimeContext | None = None
         self.preview_context_key = ""
+        self.page_match_context: RuntimeContext | None = None
+        self.page_match_context_key = ""
         self.last_preview_error_at = 0.0
         self.last_page_match_at = 0.0
         self.last_screenshot: Screenshot | None = None
@@ -536,8 +543,7 @@ class MainWindow(QMainWindow):
         if self.preview_future is not None and not self.preview_future.done():
             return
         config = self.config_from_gui()
-        should_match = self.should_update_page_match()
-        self.preview_future = self.preview_executor.submit(self.capture_preview_job, config, should_match)
+        self.preview_future = self.preview_executor.submit(self.capture_preview_job, config)
         self.preview_future.add_done_callback(self.on_preview_done)
 
     def should_update_page_match(self) -> bool:
@@ -548,11 +554,10 @@ class MainWindow(QMainWindow):
             return True
         return False
 
-    def capture_preview_job(self, config: dict[str, Any], should_match: bool) -> PreviewResult:
+    def capture_preview_job(self, config: dict[str, Any]) -> PreviewResult:
         context = self.preview_context_for(config)
         screenshot = context.device.capture_game()
-        page = context.page_matcher.match(screenshot.image) if should_match and context.page_matcher else None
-        return PreviewResult(screenshot=screenshot, page=page)
+        return PreviewResult(screenshot=screenshot)
 
     def preview_context_for(self, config: dict[str, Any]) -> RuntimeContext:
         key = repr(config)
@@ -561,21 +566,58 @@ class MainWindow(QMainWindow):
             self.preview_context_key = key
         return self.preview_context
 
+    def page_match_context_for(self, config: dict[str, Any]) -> RuntimeContext:
+        key = repr(config)
+        if self.page_match_context is None or key != self.page_match_context_key:
+            self.page_match_context = self.build_context(Event(), config)
+            self.page_match_context_key = key
+        return self.page_match_context
+
     def on_preview_done(self, future: Future) -> None:
         try:
             self.events.preview_result.emit(future.result())
         except Exception as exc:
             self.events.preview_error.emit(str(exc))
 
+    def on_page_match_done(self, future: Future) -> None:
+        try:
+            self.events.page_match_result.emit(future.result())
+        except Exception as exc:
+            self.events.page_match_error.emit(str(exc))
+
     def apply_preview_result(self, result: object) -> None:
         if not isinstance(result, PreviewResult):
             return
         self.last_screenshot = result.screenshot
         self.show_screenshot(result.screenshot)
-        if result.page is not None:
-            self.current_page = result.page
-            self.update_page_panel(result.page)
+        self.maybe_start_page_match(result.screenshot)
         self.last_preview_error_at = 0.0
+
+    def maybe_start_page_match(self, screenshot: Screenshot) -> None:
+        if not self.should_update_page_match():
+            return
+        if self.page_match_future is not None and not self.page_match_future.done():
+            return
+        config = self.config_from_gui()
+        image = screenshot.image.copy()
+        self.page_match_future = self.page_match_executor.submit(self.page_match_job, config, image)
+        self.page_match_future.add_done_callback(self.on_page_match_done)
+
+    def page_match_job(self, config: dict[str, Any], image: np.ndarray) -> PageMatch | None:
+        context = self.page_match_context_for(config)
+        return context.page_matcher.match(image) if context.page_matcher else None
+
+    def apply_page_match_result(self, result: object) -> None:
+        if not isinstance(result, PageMatch):
+            return
+        self.current_page = result
+        self.update_page_panel(result)
+
+    def handle_page_match_error(self, message: str) -> None:
+        now = time.monotonic()
+        if now - self.last_preview_error_at > 3:
+            self.append_log(f"页面识别失败：{message}")
+            self.last_preview_error_at = now
 
     def handle_preview_error(self, message: str) -> None:
         now = time.monotonic()
@@ -724,9 +766,14 @@ class MainWindow(QMainWindow):
         self.preview_timer.stop()
         if self.preview_future is not None:
             self.preview_future.cancel()
+        if self.page_match_future is not None:
+            self.page_match_future.cancel()
         if self.preview_context is not None:
             self.preview_context.device.capture.close()
+        if self.page_match_context is not None:
+            self.page_match_context.device.capture.close()
         self.preview_executor.shutdown(wait=False, cancel_futures=True)
+        self.page_match_executor.shutdown(wait=False, cancel_futures=True)
         self.hotkey.stop()
         self.runner.stop()
         super().closeEvent(event)
