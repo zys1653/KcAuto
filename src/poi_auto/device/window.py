@@ -41,6 +41,7 @@ class WindowFinder:
         self.selected_title = selected_title
         self.exclude_own_process = exclude_own_process
         self.last_title = ""
+        self._cached_hwnd: int | None = None
 
     def list_windows(self) -> list[WindowInfo]:
         try:
@@ -75,20 +76,28 @@ class WindowFinder:
         except ImportError as exc:
             raise RuntimeError("需要安装 pywin32 才能定位 Windows 窗口。") from exc
 
+        hwnd = self._cached_hwnd
+        if hwnd is None or not win32gui.IsWindow(hwnd) or not win32gui.IsWindowVisible(hwnd):
+            hwnd = self._resolve_hwnd()
+            self._cached_hwnd = hwnd
+
+        title = win32gui.GetWindowText(hwnd)
+        left_top = win32gui.ClientToScreen(hwnd, (0, 0))
+        right, bottom = win32gui.GetClientRect(hwnd)[2:]
+        if right <= 0 or bottom <= 0:
+            self._cached_hwnd = None
+            raise RuntimeError(f"窗口客户区大小异常：{title}")
+        self.last_title = title
+        return Rect(left=left_top[0], top=left_top[1], width=right, height=bottom)
+
+    def _resolve_hwnd(self) -> int:
         matches = self.list_windows()
         if not matches:
             raise RuntimeError(f"未找到标题包含“{self.title_keyword}”的外部窗口。")
 
         selected_title = self.selected_title.strip()
         selected = next((item for item in matches if item.title == selected_title), None)
-        target = selected or matches[0]
-
-        left_top = win32gui.ClientToScreen(target.hwnd, (0, 0))
-        right, bottom = win32gui.GetClientRect(target.hwnd)[2:]
-        if right <= 0 or bottom <= 0:
-            raise RuntimeError(f"窗口客户区大小异常：{target.title}")
-        self.last_title = target.title
-        return Rect(left=left_top[0], top=left_top[1], width=right, height=bottom)
+        return (selected or matches[0]).hwnd
 
 
 def game_region_from_client(client: Rect, game_config: dict) -> Rect:

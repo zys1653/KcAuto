@@ -16,11 +16,17 @@ class Screenshot:
 
 
 class ScreenCapture:
+    def __init__(self) -> None:
+        self._mss = None
+
     def grab(self, region: Rect) -> np.ndarray:
         try:
             import mss
         except ImportError as exc:
             raise RuntimeError("需要安装 mss 才能截图。") from exc
+
+        if self._mss is None:
+            self._mss = mss.mss()
 
         monitor = {
             "left": region.left,
@@ -28,9 +34,13 @@ class ScreenCapture:
             "width": region.width,
             "height": region.height,
         }
-        with mss.mss() as sct:
-            raw = np.array(sct.grab(monitor))
+        raw = np.array(self._mss.grab(monitor))
         return raw[:, :, :3][:, :, ::-1].copy()
+
+    def close(self) -> None:
+        if self._mss is not None:
+            self._mss.close()
+            self._mss = None
 
 
 def resize_to_logical(image: np.ndarray, width: int, height: int) -> np.ndarray:
@@ -41,4 +51,3 @@ def resize_to_logical(image: np.ndarray, width: int, height: int) -> np.ndarray:
     except ImportError as exc:
         raise RuntimeError("截图尺寸需要缩放时必须安装 opencv-python。") from exc
     return cv2.resize(image, (width, height), interpolation=cv2.INTER_AREA)
-

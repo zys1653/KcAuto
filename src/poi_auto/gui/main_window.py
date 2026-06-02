@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
 import time
@@ -64,10 +66,18 @@ FORMATIONS = [
 MAPS = [f"{world}-{area}" for world in range(1, 4) for area in range(1, 6)]
 
 
+@dataclass(frozen=True)
+class PreviewResult:
+    screenshot: Screenshot
+    page: PageMatch | None
+
+
 class GuiEvents(QObject):
     log_message = Signal(str)
     state_message = Signal(str)
     stop_requested = Signal()
+    preview_result = Signal(object)
+    preview_error = Signal(str)
 
 
 class GlobalHotkey:
@@ -124,8 +134,14 @@ class MainWindow(QMainWindow):
         self.events.log_message.connect(self.append_log)
         self.events.state_message.connect(self.state_label_set)
         self.events.stop_requested.connect(self.stop_task)
+        self.events.preview_result.connect(self.apply_preview_result)
+        self.events.preview_error.connect(self.handle_preview_error)
         self.runner = TaskRunner(self.build_context)
         self.hotkey = GlobalHotkey(lambda: self.events.stop_requested.emit())
+        self.preview_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="poi-preview")
+        self.preview_future: Future | None = None
+        self.preview_context: RuntimeContext | None = None
+        self.preview_context_key = ""
         self.last_preview_error_at = 0.0
         self.last_page_match_at = 0.0
         self.last_screenshot: Screenshot | None = None
@@ -137,7 +153,7 @@ class MainWindow(QMainWindow):
         self.start_hotkey()
         self.select_initial_section()
         self.update_preview_timer()
-        self.append_log("程序已启动。右侧保持实时截图和日志，调试项已移动到软件调试。")
+        self.append_log("程序已启动。实时截图已改为后台线程，界面操作不会再等待截图和模板匹配。")
 
     def _build_controls(self) -> None:
         window = self.config.get("window", {})
@@ -167,7 +183,6 @@ class MainWindow(QMainWindow):
             item.setData(Qt.UserRole, section_id)
             self.nav_list.addItem(item)
         self.nav_list.currentRowChanged.connect(self.switch_section)
-
         self.stack = QStackedWidget()
 
         self.image_label = QLabel("实时预览会显示 Poi 游戏画面")
@@ -218,7 +233,8 @@ class MainWindow(QMainWindow):
         self.preview_enabled_check.setChecked(bool(preview.get("enabled", True)))
         self.preview_show_mouse_check = QCheckBox("突出鼠标位置")
         self.preview_show_mouse_check.setChecked(bool(preview.get("show_mouse", True)))
-        self.preview_interval_spin = self._spin(50, 5000, int(preview.get("interval_ms", 200)))
+        self.preview_interval_spin = self._spin(100, 5000, int(preview.get("interval_ms", 250)))
+        self.page_match_interval_spin = self._spin(250, 10000, int(preview.get("page_match_interval_ms", 1000)))
         self.preview_enabled_check.toggled.connect(self.update_preview_timer)
         self.preview_interval_spin.valueChanged.connect(self.update_preview_timer)
 
@@ -331,6 +347,7 @@ class MainWindow(QMainWindow):
         preview_form.addRow("", self.preview_enabled_check)
         preview_form.addRow("", self.preview_show_mouse_check)
         preview_form.addRow("刷新间隔 ms", self.preview_interval_spin)
+        preview_form.addRow("页面识别间隔 ms", self.page_match_interval_spin)
         preview_form.addRow("停止快捷键", self.stop_hotkey_edit)
 
         page_group = QGroupBox("页面识别")
@@ -443,6 +460,7 @@ class MainWindow(QMainWindow):
             **config["preview"],
             "enabled": self.preview_enabled_check.isChecked(),
             "interval_ms": self.preview_interval_spin.value(),
+            "page_match_interval_ms": self.page_match_interval_spin.value(),
             "show_mouse": self.preview_show_mouse_check.isChecked(),
         }
         return config
@@ -515,18 +533,55 @@ class MainWindow(QMainWindow):
         self.state_label.setText("状态：停止中")
 
     def refresh_preview_tick(self) -> None:
+        if self.preview_future is not None and not self.preview_future.done():
+            return
+        config = self.config_from_gui()
+        should_match = self.should_update_page_match()
+        self.preview_future = self.preview_executor.submit(self.capture_preview_job, config, should_match)
+        self.preview_future.add_done_callback(self.on_preview_done)
+
+    def should_update_page_match(self) -> bool:
+        now = time.monotonic()
+        interval = max(self.page_match_interval_spin.value() / 1000, 0.25)
+        if now - self.last_page_match_at >= interval:
+            self.last_page_match_at = now
+            return True
+        return False
+
+    def capture_preview_job(self, config: dict[str, Any], should_match: bool) -> PreviewResult:
+        context = self.preview_context_for(config)
+        screenshot = context.device.capture_game()
+        page = context.page_matcher.match(screenshot.image) if should_match and context.page_matcher else None
+        return PreviewResult(screenshot=screenshot, page=page)
+
+    def preview_context_for(self, config: dict[str, Any]) -> RuntimeContext:
+        key = repr(config)
+        if self.preview_context is None or key != self.preview_context_key:
+            self.preview_context = self.build_context(Event(), config)
+            self.preview_context_key = key
+        return self.preview_context
+
+    def on_preview_done(self, future: Future) -> None:
         try:
-            context = self.build_context(Event(), self.config_from_gui())
-            screenshot = context.device.capture_game()
-            self.last_screenshot = screenshot
-            self.show_screenshot(screenshot)
-            self.maybe_update_page_match(context, screenshot)
-            self.last_preview_error_at = 0.0
+            self.events.preview_result.emit(future.result())
         except Exception as exc:
-            now = time.monotonic()
-            if now - self.last_preview_error_at > 3:
-                self.append_log(f"实时预览失败：{exc}")
-                self.last_preview_error_at = now
+            self.events.preview_error.emit(str(exc))
+
+    def apply_preview_result(self, result: object) -> None:
+        if not isinstance(result, PreviewResult):
+            return
+        self.last_screenshot = result.screenshot
+        self.show_screenshot(result.screenshot)
+        if result.page is not None:
+            self.current_page = result.page
+            self.update_page_panel(result.page)
+        self.last_preview_error_at = 0.0
+
+    def handle_preview_error(self, message: str) -> None:
+        now = time.monotonic()
+        if now - self.last_preview_error_at > 3:
+            self.append_log(f"实时预览失败：{message}")
+            self.last_preview_error_at = now
 
     def refresh_screenshot(self) -> None:
         try:
@@ -535,7 +590,10 @@ class MainWindow(QMainWindow):
             screenshot = context.device.capture_game()
             self.last_screenshot = screenshot
             self.show_screenshot(screenshot)
-            self.maybe_update_page_match(context, screenshot, force=True)
+            page = context.page_matcher.match(screenshot.image) if context.page_matcher else None
+            if page is not None:
+                self.current_page = page
+                self.update_page_panel(page)
             selected = context.device.window_finder.last_title
             self.append_log(
                 "截图完成："
@@ -547,17 +605,6 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self.append_log(f"截图失败：{exc}")
             QMessageBox.warning(self, "截图失败", str(exc))
-
-    def maybe_update_page_match(self, context: RuntimeContext, screenshot: Screenshot, force: bool = False) -> None:
-        if context.page_matcher is None:
-            return
-        now = time.monotonic()
-        interval = context.page_matcher.monitor_interval_ms / 1000
-        if not force and now - self.last_page_match_at < interval:
-            return
-        self.last_page_match_at = now
-        self.current_page = context.page_matcher.match(screenshot.image)
-        self.update_page_panel(self.current_page)
 
     def update_page_panel(self, page: PageMatch) -> None:
         self.page_label.setText(f"当前页面：{page.name} ({page.key})")
@@ -675,6 +722,11 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: Any) -> None:
         self.preview_timer.stop()
+        if self.preview_future is not None:
+            self.preview_future.cancel()
+        if self.preview_context is not None:
+            self.preview_context.device.capture.close()
+        self.preview_executor.shutdown(wait=False, cancel_futures=True)
         self.hotkey.stop()
         self.runner.stop()
         super().closeEvent(event)
