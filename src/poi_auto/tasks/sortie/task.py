@@ -24,6 +24,9 @@ class SortieTask(BaseTask):
         self.unknown_max_retries = int(recovery.get("unknown_max_retries", 3))
         self.last_wait_ms = int(recovery.get("default_wait_ms", 500))
         self.unknown_retry_count = 0
+        self.last_page_key = ""
+        self.battle_transition_waiting = False
+        self.battle_transition_started_at = 0.0
 
     def step(self, context: RuntimeContext) -> bool:
         if context.page_matcher is None:
@@ -42,21 +45,48 @@ class SortieTask(BaseTask):
             f"map={target_map}, battle={self.battle_count}/{max_battles}"
         )
 
+        page = self._resolve_battle_transition(context, page)
+
         if not page.is_known:
-            return self._handle_unknown_page(context)
+            return self._finish_step(page, self._handle_unknown_page(context))
 
         if self.unknown_retry_count:
             context.log(f"页面已恢复识别：page={page.key}，清除未知页面重试计数。")
             self.unknown_retry_count = 0
 
         if not self.sortie_started:
-            return self._handle_entry_page(context, page, target_map)
+            return self._finish_step(page, self._handle_entry_page(context, page, target_map))
 
         page_rule = self._loop_rule(page.key)
         if page_rule is None:
             context.log(f"页面 {page.key} 暂未纳入出击流程，任务停止。")
-            return False
-        return self._run_page_rule(context, page, page_rule, max_battles)
+            return self._finish_step(page, False)
+        return self._finish_step(page, self._run_page_rule(context, page, page_rule, max_battles))
+
+    def _resolve_battle_transition(self, context: RuntimeContext, page: Any) -> Any:
+        if self.last_page_key != "battle" or page.key == "battle":
+            return page
+
+        battle_rule = self._loop_rule("battle") or {}
+        wait_ms = int(battle_rule.get("transition_wait_ms", battle_rule.get("battle_transition_wait_ms", 3000)))
+        self.battle_transition_waiting = True
+        self.battle_transition_started_at = time.monotonic()
+        self.last_wait_ms = wait_ms
+        context.log(f"战斗页面已切换：from=battle, to={page.key}，等待 {wait_ms}ms 后重新识别。")
+        self._wait(context, wait_ms)
+        self.battle_transition_waiting = False
+
+        if context.stop_event.is_set() or context.page_matcher is None:
+            return page
+        screenshot = context.device.capture_game()
+        refreshed = context.page_matcher.match(screenshot.image)
+        context.latest_page = refreshed
+        context.log(f"战斗切换等待后重新识别：page={refreshed.key}, score={refreshed.score:.3f}")
+        return refreshed
+
+    def _finish_step(self, page: Any, should_continue: bool) -> bool:
+        self.last_page_key = page.key
+        return should_continue
 
     def _handle_unknown_page(self, context: RuntimeContext) -> bool:
         self.unknown_retry_count += 1
@@ -166,7 +196,7 @@ class SortieTask(BaseTask):
         if action_type == "click_until_next_page":
             return self._click_until_next_page(context, page, rule)
         if action_type == "collect_damage":
-            return self._collect_damage(context, rule)
+            return self._collect_damage(context, page, rule)
         if action_type == "choose_formation":
             return self._choose_formation(context, page, rule)
         if action_type == "advance_or_retreat":
@@ -222,14 +252,26 @@ class SortieTask(BaseTask):
                 return True
         return True
 
-    def _collect_damage(self, context: RuntimeContext, rule: dict[str, Any]) -> bool:
+    def _collect_damage(self, context: RuntimeContext, page: Any, rule: dict[str, Any]) -> bool:
         screenshot = context.device.last_screenshot or context.device.capture_game()
         self.last_damage_report = self._detect_damage(context, screenshot.image)
         context.log(f"损伤采集：{self.last_damage_report.summary()}")
+        if page.key == "battle":
+            if self.last_damage_report.hp_values:
+                context.log(f"战斗中血量：{self.last_damage_report.hp_summary()}")
+            elif self.last_damage_report.ocr_error:
+                context.log(f"战斗中血量 OCR 不可用：{self.last_damage_report.ocr_error}")
+            else:
+                context.log("战斗中血量：未识别到 HP 数字。")
         if bool(rule.get("click", False)):
             point = rule.get("point") or self.rules.get("default_click")
             if isinstance(point, dict):
                 self._click_xy(context, point, str(point.get("name", "继续")))
+        if page.key == "battle":
+            poll_ms = int(rule.get("poll_ms", 500))
+            self.last_wait_ms = poll_ms
+            self._wait(context, poll_ms)
+            return True
         self._wait_for_rule(context, rule, 500)
         return True
 

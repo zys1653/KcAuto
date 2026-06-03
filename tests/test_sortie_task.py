@@ -120,7 +120,7 @@ class SortieTaskTest(unittest.TestCase):
             "loop_pages": {
                 "compass": {"action": "spin", "wait_ms": 1},
                 "formation": {"action_type": "choose_formation", "wait_ms": 1},
-                "battle": {"action_type": "collect_damage", "click": False, "wait_ms": 1},
+                "battle": {"action_type": "collect_damage", "click": False, "poll_ms": 1},
                 "night_battle": {"action": "enter", "wait_ms": 1},
                 "battle_result": {"action_type": "click_anywhere", "action": "continue", "wait_ms": 1},
                 "exp_gain": {"action_type": "click_anywhere", "action": "continue", "wait_ms": 1},
@@ -136,12 +136,12 @@ class SortieTaskTest(unittest.TestCase):
             [
                 page("compass", {"spin": {"x": 10, "y": 10}}),
                 page("formation", {"line_ahead": {"x": 20, "y": 20}}),
-                page("battle"),
                 page("night_battle", {"enter": {"x": 30, "y": 30}}),
                 page("battle_result", {"continue": {"x": 40, "y": 40}}),
                 page("exp_gain", {"continue": {"x": 50, "y": 50}}),
                 page("new_ship", {"continue": {"x": 60, "y": 60}}),
                 page("resource_node", {"continue": {"x": 70, "y": 70}}),
+                page("battle"),
             ],
             device,
         )
@@ -151,6 +151,63 @@ class SortieTaskTest(unittest.TestCase):
 
         self.assertEqual(task.battle_count, 1)
         self.assertEqual(device.clicks, [(10, 10), (20, 20), (30, 30), (40, 40), (50, 50), (60, 60), (70, 70)])
+
+    def test_battle_page_uses_poll_delay_and_logs_hp(self) -> None:
+        rules = {
+            "entry_flow": [],
+            "loop_pages": {"battle": {"action_type": "collect_damage", "click": False, "poll_ms": 1, "wait_ms": 9999}},
+        }
+        task = self.make_task(rules)
+        task.sortie_started = True
+        task._detect_damage = lambda _context, _image: DamageReport(hp_values=[(33, 33), (18, 18), (17, 35)])
+        logs: list[str] = []
+
+        self.assertTrue(task.step(self.make_context([page("battle")], logs=logs)))
+        self.assertEqual(task.last_wait_ms, 1)
+        self.assertEqual(task.last_page_key, "battle")
+        self.assertTrue(any("战斗中血量：1:33/33, 2:18/18, 3:17/35" in item for item in logs))
+
+    def test_battle_transition_waits_then_processes_refreshed_page(self) -> None:
+        rules = {
+            "entry_flow": [],
+            "loop_pages": {
+                "battle": {"action_type": "collect_damage", "click": False, "poll_ms": 1, "transition_wait_ms": 1},
+                "battle_result": {"action_type": "click_anywhere", "action": "continue", "wait_ms": 1},
+            },
+        }
+        task = self.make_task(rules)
+        task.sortie_started = True
+        task._detect_damage = lambda _context, _image: DamageReport()
+        device = FakeDevice()
+        context = self.make_context(
+            [
+                page("battle"),
+                page("battle_result", {"continue": {"x": 40, "y": 40}}),
+                page("battle_result", {"continue": {"x": 40, "y": 40}}),
+            ],
+            device,
+        )
+
+        self.assertTrue(task.step(context))
+        self.assertTrue(task.step(context))
+        self.assertEqual(device.clicks, [(40, 40)])
+        self.assertEqual(task.last_page_key, "battle_result")
+
+    def test_battle_transition_to_unknown_waits_before_unknown_retry(self) -> None:
+        rules = {
+            "recovery": {"default_wait_ms": 1},
+            "entry_flow": [],
+            "loop_pages": {"battle": {"action_type": "collect_damage", "click": False, "poll_ms": 1, "transition_wait_ms": 1}},
+        }
+        task = self.make_task(rules)
+        task.sortie_started = True
+        task._detect_damage = lambda _context, _image: DamageReport()
+        context = self.make_context([page("battle"), page("unknown"), page("unknown")])
+
+        self.assertTrue(task.step(context))
+        self.assertTrue(task.step(context))
+        self.assertEqual(task.unknown_retry_count, 1)
+        self.assertEqual(task.last_page_key, "unknown")
 
     def test_advance_or_retreat_uses_damage_before_proceeding(self) -> None:
         rules = {

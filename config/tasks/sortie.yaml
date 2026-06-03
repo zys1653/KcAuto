@@ -33,7 +33,8 @@ loop_pages:
   battle:
     action_type: collect_damage
     click: false
-    wait_ms: 15000
+    poll_ms: 500
+    transition_wait_ms: 3000
   night_battle:
     action: enter
     wait_ms: 20000
@@ -78,7 +79,7 @@ damage_detection:
 
 hp_ocr:
   enabled: true
-  region: { x: 430, y: 215, width: 180, height: 475 }
+  region: { x: 245, y: 120, width: 105, height: 390 }
 
 default_click:
   name: "继续"

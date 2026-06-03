@@ -7,7 +7,7 @@ ui:
 task:
   selected: sortie
 game:
-  logical_width: 1195
+  logical_width: 1194
   logical_height: 720
   capture_width: 800
   capture_height: 480
@@ -21,8 +21,8 @@ vision:
   match_threshold: 0.86
 sortie:
   enabled: true
-  map: 1-1
-  formation: line_ahead
+  map: 1-2
+  formation: double_line
   max_runs: 10
   max_battles: 6
   stop_on_heavy_damage: true

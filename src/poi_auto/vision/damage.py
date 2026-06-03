@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+import re
 from typing import Any
 
 import numpy as np
@@ -20,6 +21,7 @@ class DamageStateResult:
 class DamageReport:
     states: dict[str, DamageStateResult] = field(default_factory=dict)
     hp_log: str = ""
+    hp_values: list[tuple[int, int]] = field(default_factory=list)
     ocr_error: str = ""
 
     def count(self, state: str) -> int:
@@ -31,11 +33,16 @@ class DamageReport:
 
     def summary(self) -> str:
         parts = [f"{state}={result.count}" for state, result in self.states.items()]
-        if self.hp_log:
-            parts.append(f"hp={self.hp_log}")
+        if self.hp_values:
+            parts.append(f"hp=[{self.hp_summary()}]")
+        elif self.hp_log:
+            parts.append(f"hp_raw={self.hp_log}")
         if self.ocr_error:
             parts.append(f"ocr={self.ocr_error}")
         return ", ".join(parts) if parts else "no damage rules"
+
+    def hp_summary(self) -> str:
+        return ", ".join(f"{index}:{current}/{maximum}" for index, (current, maximum) in enumerate(self.hp_values, 1))
 
 
 class DamageDetector:
@@ -55,12 +62,13 @@ class DamageDetector:
                 states[str(state)] = self._detect_state(str(state), image, rule)
 
         hp_log = ""
+        hp_values: list[tuple[int, int]] = []
         ocr_error = ""
         if hp_ocr_enabled:
             hp_rule = rules.get("hp_ocr", {}) or {}
-            hp_log, ocr_error = self._ocr_hp(image, hp_rule)
+            hp_values, hp_log, ocr_error = self._ocr_hp(image, hp_rule)
 
-        return DamageReport(states=states, hp_log=hp_log, ocr_error=ocr_error)
+        return DamageReport(states=states, hp_log=hp_log, hp_values=hp_values, ocr_error=ocr_error)
 
     def _detect_state(self, state: str, image: np.ndarray, rule: dict[str, Any]) -> DamageStateResult:
         try:
@@ -117,20 +125,27 @@ class DamageDetector:
             kept.append(point)
         return kept
 
-    def _ocr_hp(self, image: np.ndarray, rule: dict[str, Any]) -> tuple[str, str]:
+    def _ocr_hp(self, image: np.ndarray, rule: dict[str, Any]) -> tuple[list[tuple[int, int]], str, str]:
         try:
             import cv2
             import pytesseract
         except ImportError as exc:
-            return "", f"unavailable:{exc.name}"
+            return [], "", f"unavailable:{exc.name}"
 
         source, _offset_x, _offset_y = self._crop(image, rule.get("region"))
         if source.size == 0:
-            return "", "invalid_region"
+            return [], "", "invalid_region"
         gray = cv2.cvtColor(source, cv2.COLOR_RGB2GRAY)
         _threshold, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         try:
             text = pytesseract.image_to_string(binary, config="--psm 6 -c tessedit_char_whitelist=0123456789/")
         except Exception as exc:
-            return "", str(exc)
-        return " ".join(text.split()), ""
+            return [], "", str(exc)
+        hp_values = self.parse_hp_text(text, max_rows=int(rule.get("max_rows", 6)))
+        return hp_values, " ".join(text.split()), ""
+
+    @staticmethod
+    def parse_hp_text(text: str, max_rows: int = 6) -> list[tuple[int, int]]:
+        normalized = re.sub(r"\s*/\s*", "/", text)
+        pairs = re.findall(r"(\d{1,3})/(\d{1,3})", normalized)
+        return [(int(current), int(maximum)) for current, maximum in pairs[:max_rows]]
