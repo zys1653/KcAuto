@@ -9,8 +9,8 @@ task:
 game:
   logical_width: 1195
   logical_height: 720
-  capture_width: 1200
-  capture_height: 720
+  capture_width: 800
+  capture_height: 480
   offset_x: 0
   offset_y: 0
   crop_mode: left_center_fixed

@@ -110,7 +110,7 @@ pages:
 
   sortie_start:
     name: "出击开始"
-    min_matches: 2
+    min_matches: 1
     templates:
       - path: "sortie/combat_start_1.png"
         threshold: 0.86
@@ -129,7 +129,7 @@ pages:
     name: "罗盘"
     min_matches: 1
     templates:
-      - path: "map/compass.png"
+      - path: "formation/compass.png"
         threshold: 0.86
     actions:
       spin:
@@ -175,42 +175,46 @@ pages:
     name: "战斗中"
     min_matches: 1
     templates:
-      - path: "battle/battle.png"
+      - path: "battle/flagship_marker.png"
         threshold: 0.86
 
   night_battle:
-    name: "夜战突入"
+    name: "夜战判断"
     min_matches: 1
     templates:
-      - path: "battle/night_battle.png"
+      - path: "battle/combat_nb_fight.png"
+        threshold: 0.86
+      - path: "battle/combat_nb_retreat.png"
         threshold: 0.86
     actions:
       enter:
         name: "突入"
-        x: 790
-        y: 600
+        x: 769
+        y: 370
       decline:
         name: "不突入"
-        x: 410
-        y: 600
+        x: 394
+        y: 357
 
   battle_result:
     name: "战斗评价"
     min_matches: 1
     templates:
-      - path: "battle/result.png"
+      - path: "formation/next.png"
         threshold: 0.86
     actions:
       continue:
         name: "继续"
-        x: 820
-        y: 680
+        x: 1116
+        y: 639
 
   exp_gain:
-    name: "经验结算"
-    min_matches: 1
+    name: "战果报告"
+    min_matches: 2
     templates:
-      - path: "battle/exp_gain.png"
+      - path: "formation/battle_result.png"
+        threshold: 0.86
+      - path: "formation/exp.png"
         threshold: 0.86
     actions:
       continue:
@@ -222,29 +226,31 @@ pages:
     name: "获得新船"
     min_matches: 1
     templates:
-      - path: "battle/new_ship.png"
+      - path: "formation/next_alt.png"
         threshold: 0.86
     actions:
       continue:
         name: "继续"
-        x: 820
-        y: 680
+        x: 1116
+        y: 639
 
   advance_or_retreat:
     name: "进击/撤退"
     min_matches: 1
     templates:
-      - path: "battle/advance_or_retreat.png"
+      - path: "battle/combat_continue.png"
+        threshold: 0.86
+      - path: "battle/combat_retreat.png"
         threshold: 0.86
     actions:
       proceed:
         name: "进击"
-        x: 790
-        y: 600
+        x: 435
+        y: 390
       retreat:
         name: "撤退"
-        x: 410
-        y: 600
+        x: 738
+        y: 366
 
   resource_node:
     name: "补给点"

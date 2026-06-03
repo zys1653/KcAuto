@@ -22,10 +22,10 @@ map_actions:
 loop_pages:
   sortie_start:
     action: start
-    wait_ms: 1200
+    wait_ms: 5000
   compass:
     action: spin
-    wait_ms: 3000
+    wait_ms: 15000
   formation:
     action_type: choose_formation
     count_battle: true
@@ -33,22 +33,22 @@ loop_pages:
   battle:
     action_type: collect_damage
     click: false
-    wait_ms: 1000
+    wait_ms: 15000
   night_battle:
     action: enter
-    wait_ms: 1200
+    wait_ms: 20000
   battle_result:
     action_type: click_anywhere
     action: continue
-    wait_ms: 800
+    wait_ms: 5000
   exp_gain:
     action_type: click_anywhere
     action: continue
-    wait_ms: 800
+    wait_ms: 4000
   new_ship:
     action_type: click_anywhere
     action: continue
-    wait_ms: 800
+    wait_ms: 5000
   resource_node:
     action_type: click_anywhere
     action: continue

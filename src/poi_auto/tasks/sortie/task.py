@@ -20,6 +20,10 @@ class SortieTask(BaseTask):
         self.entry_index = 0
         self.sortie_started = False
         self.last_damage_report = DamageReport()
+        recovery = self.rules.get("recovery", {}) or {}
+        self.unknown_max_retries = int(recovery.get("unknown_max_retries", 3))
+        self.last_wait_ms = int(recovery.get("default_wait_ms", 500))
+        self.unknown_retry_count = 0
 
     def step(self, context: RuntimeContext) -> bool:
         if context.page_matcher is None:
@@ -39,8 +43,11 @@ class SortieTask(BaseTask):
         )
 
         if not page.is_known:
-            context.log("当前页面未知，出击任务停止，避免盲点。")
-            return False
+            return self._handle_unknown_page(context)
+
+        if self.unknown_retry_count:
+            context.log(f"页面已恢复识别：page={page.key}，清除未知页面重试计数。")
+            self.unknown_retry_count = 0
 
         if not self.sortie_started:
             return self._handle_entry_page(context, page, target_map)
@@ -51,6 +58,23 @@ class SortieTask(BaseTask):
             return False
         return self._run_page_rule(context, page, page_rule, max_battles)
 
+    def _handle_unknown_page(self, context: RuntimeContext) -> bool:
+        self.unknown_retry_count += 1
+        if self.unknown_retry_count >= self.unknown_max_retries:
+            context.log(
+                "当前页面未知，出击任务停止："
+                f"retry={self.unknown_retry_count}/{self.unknown_max_retries}, "
+                f"last_wait_ms={self.last_wait_ms}"
+            )
+            return False
+        context.log(
+            "当前页面未知，等待后重试："
+            f"retry={self.unknown_retry_count}/{self.unknown_max_retries}, "
+            f"wait_ms={self.last_wait_ms}"
+        )
+        self._wait(context, self.last_wait_ms)
+        return True
+
     def _handle_entry_page(self, context: RuntimeContext, page: Any, target_map: str) -> bool:
         entry_flow = self.rules.get("entry_flow", []) or []
         if self.entry_index >= len(entry_flow):
@@ -60,19 +84,59 @@ class SortieTask(BaseTask):
         expected = entry_flow[self.entry_index] or {}
         expected_page = str(expected.get("page", ""))
         if page.key != expected_page:
-            context.log(f"等待出击入口流程页面：expected={expected_page}, current={page.key}")
+            return self._recover_entry_flow(context, page, target_map, entry_flow, expected, expected_page)
+
+        return self._run_entry_step(context, page, target_map, expected, self.entry_index, len(entry_flow))
+
+    def _recover_entry_flow(
+        self,
+        context: RuntimeContext,
+        page: Any,
+        target_map: str,
+        entry_flow: list[Any],
+        expected: dict[str, Any],
+        expected_page: str,
+    ) -> bool:
+        current_index = self._entry_index_for_page(entry_flow, page.key)
+        if current_index is None:
+            context.log(f"等待出击入口流程页面：expected={expected_page}, current={page.key}，当前页面不在入口流程中。")
             self._wait(context, int(expected.get("poll_wait_ms", 500)))
             return True
 
-        action_key = self._resolve_action_key(context, expected, target_map)
-        if action_key and not self._click_page_action(context, page, action_key):
+        current_step = entry_flow[current_index] or {}
+        context.log(
+            "入口流程页面错位，按当前页面重试点击："
+            f"expected={expected_page}, current={page.key}, step_index={current_index}"
+        )
+        return self._run_entry_step(context, page, target_map, current_step, current_index, len(entry_flow))
+
+    def _entry_index_for_page(self, entry_flow: list[Any], page_key: str) -> int | None:
+        for index, step in enumerate(entry_flow):
+            if isinstance(step, dict) and str(step.get("page", "")) == page_key:
+                return index
+        return None
+
+    def _run_entry_step(
+        self,
+        context: RuntimeContext,
+        page: Any,
+        target_map: str,
+        step: dict[str, Any],
+        step_index: int,
+        entry_flow_len: int,
+    ) -> bool:
+        action_key = self._resolve_action_key(context, step, target_map)
+        if not action_key:
+            context.log(f"入口流程页面缺少动作配置：page={page.key}")
+            return False
+        if not self._click_page_action(context, page, action_key):
             return False
 
-        self.entry_index += 1
-        if self.entry_index >= len(entry_flow):
+        self.entry_index = step_index + 1
+        if self.entry_index >= entry_flow_len:
             self.sortie_started = True
             context.log("出击入口流程已完成，进入地图循环。")
-        self._wait(context, int(expected.get("wait_ms", 500)))
+        self._wait_for_rule(context, step, 500)
         return True
 
     def _resolve_action_key(self, context: RuntimeContext, rule: dict[str, Any], target_map: str) -> str:
@@ -91,7 +155,7 @@ class SortieTask(BaseTask):
     def _run_page_rule(self, context: RuntimeContext, page: Any, rule: dict[str, Any], max_battles: int) -> bool:
         action_type = str(rule.get("action_type", "click_action"))
         if action_type == "wait":
-            self._wait(context, int(rule.get("wait_ms", 500)))
+            self._wait_for_rule(context, rule, 500)
             return True
         if action_type == "click_action":
             return self._click_action_rule(context, page, rule)
@@ -118,7 +182,7 @@ class SortieTask(BaseTask):
         action_key = str(rule.get("action", ""))
         if action_key and not self._click_page_action(context, page, action_key):
             return False
-        self._wait(context, int(rule.get("wait_ms", 500)))
+        self._wait_for_rule(context, rule, 500)
         return True
 
     def _click_anywhere(self, context: RuntimeContext, page: Any, rule: dict[str, Any]) -> bool:
@@ -132,7 +196,7 @@ class SortieTask(BaseTask):
                 context.log(f"页面 {page.key} 缺少继续点击坐标。")
                 return False
             self._click_xy(context, point, str(point.get("name", "继续")))
-        self._wait(context, int(rule.get("wait_ms", 500)))
+        self._wait_for_rule(context, rule, 500)
         return True
 
     def _click_until_next_page(self, context: RuntimeContext, page: Any, rule: dict[str, Any]) -> bool:
@@ -150,6 +214,7 @@ class SortieTask(BaseTask):
                     context.log(f"页面 {page.key} 缺少持续点击坐标。")
                     return False
                 self._click_xy(context, point, str(point.get("name", "继续")))
+            self.last_wait_ms = interval_ms
             self._wait(context, interval_ms)
             new_page = context.page_matcher.match(context.device.capture_game().image) if context.page_matcher else page
             if new_page.key != page.key:
@@ -165,7 +230,7 @@ class SortieTask(BaseTask):
             point = rule.get("point") or self.rules.get("default_click")
             if isinstance(point, dict):
                 self._click_xy(context, point, str(point.get("name", "继续")))
-        self._wait(context, int(rule.get("wait_ms", 500)))
+        self._wait_for_rule(context, rule, 500)
         return True
 
     def _choose_formation(self, context: RuntimeContext, page: Any, rule: dict[str, Any]) -> bool:
@@ -175,7 +240,7 @@ class SortieTask(BaseTask):
             return False
         if bool(rule.get("count_battle", True)):
             self.battle_count += 1
-        self._wait(context, int(rule.get("wait_ms", 1000)))
+        self._wait_for_rule(context, rule, 1000)
         return True
 
     def _advance_or_retreat(self, context: RuntimeContext, page: Any, rule: dict[str, Any], max_battles: int) -> bool:
@@ -192,7 +257,7 @@ class SortieTask(BaseTask):
             context.log("撤退：" + "，".join(retreat_reasons))
         else:
             context.log("继续进击。")
-        self._wait(context, int(rule.get("wait_ms", 1000)))
+        self._wait_for_rule(context, rule, 1000)
         return True
 
     def _should_retreat_for_damage(self, context: RuntimeContext) -> bool:
@@ -236,3 +301,7 @@ class SortieTask(BaseTask):
         end_at = time.monotonic() + max(ms, 0) / 1000
         while time.monotonic() < end_at and not context.stop_event.is_set():
             time.sleep(min(0.05, end_at - time.monotonic()))
+
+    def _wait_for_rule(self, context: RuntimeContext, rule: dict[str, Any], default_ms: int) -> None:
+        self.last_wait_ms = int(rule.get("wait_ms", default_ms))
+        self._wait(context, self.last_wait_ms)

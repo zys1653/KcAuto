@@ -60,7 +60,12 @@ class SortieTaskTest(unittest.TestCase):
             yaml.safe_dump(rules, tmp, allow_unicode=True)
         return SortieTask(Path(tmp.name))
 
-    def make_context(self, pages: list[PageMatch], device: FakeDevice | None = None) -> RuntimeContext:
+    def make_context(
+        self,
+        pages: list[PageMatch],
+        device: FakeDevice | None = None,
+        logs: list[str] | None = None,
+    ) -> RuntimeContext:
         fake_device = device or FakeDevice()
         return RuntimeContext(
             config={
@@ -76,7 +81,7 @@ class SortieTaskTest(unittest.TestCase):
             device=fake_device,
             recognizer=SimpleNamespace(),
             stop_event=Event(),
-            logger=lambda _message: None,
+            logger=(logs.append if logs is not None else lambda _message: None),
             page_matcher=FakePageMatcher(pages),
         )
 
@@ -167,14 +172,91 @@ class SortieTaskTest(unittest.TestCase):
         self.assertTrue(task.step(context))
         self.assertEqual(device.clicks, [(2, 2)])
 
-    def test_return_home_and_unknown_stop_task(self) -> None:
+    def test_return_home_stops_task(self) -> None:
         finish = self.make_task({"entry_flow": [], "loop_pages": {"return_home": {"action_type": "finish"}}})
         finish.sortie_started = True
         self.assertFalse(finish.step(self.make_context([page("return_home")])))
 
-        unknown = self.make_task({"entry_flow": [], "loop_pages": {}})
-        unknown.sortie_started = True
-        self.assertFalse(unknown.step(self.make_context([page("unknown")])))
+    def test_unknown_page_retries_three_times_before_stopping(self) -> None:
+        task = self.make_task({"recovery": {"default_wait_ms": 1}, "entry_flow": [], "loop_pages": {}})
+        task.sortie_started = True
+        logs: list[str] = []
+        context = self.make_context([page("unknown"), page("unknown"), page("unknown")], logs=logs)
+
+        self.assertTrue(task.step(context))
+        self.assertTrue(task.step(context))
+        self.assertFalse(task.step(context))
+        self.assertEqual(task.unknown_retry_count, 3)
+        self.assertTrue(any("retry=3/3" in item for item in logs))
+
+    def test_unknown_retry_count_clears_after_known_page(self) -> None:
+        task = self.make_task(
+            {
+                "recovery": {"default_wait_ms": 1},
+                "entry_flow": [],
+                "loop_pages": {"battle": {"action_type": "wait", "wait_ms": 1}},
+            }
+        )
+        task.sortie_started = True
+        context = self.make_context([page("unknown"), page("battle")])
+
+        self.assertTrue(task.step(context))
+        self.assertTrue(task.step(context))
+        self.assertEqual(task.unknown_retry_count, 0)
+
+    def test_entry_flow_replays_current_known_page_when_expected_differs(self) -> None:
+        rules = {
+            "entry_flow": [
+                {"page": "home", "action": "sortie", "wait_ms": 1},
+                {"page": "sortie_menu", "action": "sortie_start", "wait_ms": 1},
+                {"page": "map_select_1", "action_from_map": True, "wait_ms": 1},
+            ],
+            "map_actions": {"1-1": {"page": "map_select_1", "action": "map_1_1"}},
+            "loop_pages": {},
+        }
+        task = self.make_task(rules)
+        task.entry_index = 2
+        device = FakeDevice()
+        context = self.make_context([page("home", {"sortie": {"x": 1, "y": 2}})], device)
+
+        self.assertTrue(task.step(context))
+        self.assertEqual(device.clicks, [(1, 2)])
+        self.assertEqual(task.entry_index, 1)
+
+    def test_entry_flow_replays_current_intermediate_page_when_expected_differs(self) -> None:
+        rules = {
+            "entry_flow": [
+                {"page": "home", "action": "sortie", "wait_ms": 1},
+                {"page": "sortie_menu", "action": "sortie_start", "wait_ms": 1},
+                {"page": "map_select_1", "action_from_map": True, "wait_ms": 1},
+            ],
+            "map_actions": {"1-1": {"page": "map_select_1", "action": "map_1_1"}},
+            "loop_pages": {},
+        }
+        task = self.make_task(rules)
+        task.entry_index = 2
+        device = FakeDevice()
+        context = self.make_context([page("sortie_menu", {"sortie_start": {"x": 3, "y": 4}})], device)
+
+        self.assertTrue(task.step(context))
+        self.assertEqual(device.clicks, [(3, 4)])
+        self.assertEqual(task.entry_index, 2)
+
+    def test_entry_flow_waits_when_current_page_is_not_configured(self) -> None:
+        task = self.make_task(
+            {
+                "recovery": {"default_wait_ms": 1},
+                "entry_flow": [{"page": "map_select_1", "action_from_map": True, "wait_ms": 1}],
+                "map_actions": {"1-1": {"page": "map_select_1", "action": "map_1_1"}},
+                "loop_pages": {},
+            }
+        )
+        device = FakeDevice()
+        context = self.make_context([page("sortie_menu", {"sortie_start": {"x": 3, "y": 4}})], device)
+
+        self.assertTrue(task.step(context))
+        self.assertEqual(device.clicks, [])
+        self.assertEqual(task.entry_index, 0)
 
     def test_missing_template_is_reported_without_crashing(self) -> None:
         matcher = PageMatcher(
