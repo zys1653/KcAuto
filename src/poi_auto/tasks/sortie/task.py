@@ -259,6 +259,8 @@ class SortieTask(BaseTask):
         self.last_damage_report = self._detect_damage(context, screenshot.image, hp_ocr_enabled=hp_ocr_enabled)
         context.log(f"损伤采集：{self.last_damage_report.summary()}")
         if page.key == "battle":
+            if self.last_damage_report.hp_debug_dir is not None:
+                context.log(f"HP OCR 调试图已输出：{self.last_damage_report.hp_debug_dir}")
             if self.last_damage_report.hp_values:
                 context.log(f"战斗中血量：{self.last_damage_report.hp_summary()}")
                 self._warn_if_hp_count_mismatch(context, self.last_damage_report)
@@ -338,6 +340,14 @@ class SortieTask(BaseTask):
             rule["padding"] = dict(ocr_config.get("hp_padding") or {})
         if "hp_scale" in ocr_config:
             rule["scale"] = int(ocr_config.get("hp_scale", 1))
+        if "debug_output_enabled" in ocr_config:
+            rule["debug_output_enabled"] = bool(ocr_config.get("debug_output_enabled", False))
+        if "debug_output_dir" in ocr_config:
+            output_dir = Path(str(ocr_config.get("debug_output_dir") or "debug_screenshots/ocr"))
+            root = getattr(context.paths, "root", None)
+            if root is not None and not output_dir.is_absolute():
+                output_dir = Path(root) / output_dir
+            rule["debug_output_dir"] = str(output_dir)
         rule.setdefault("max_rows", 6)
         return rule
 
@@ -359,7 +369,11 @@ class SortieTask(BaseTask):
         actual = len(report.hp_values)
         if actual != expected:
             hp_summary = report.hp_summary() if report.hp_values else "none"
-            context.log(f"[WARN] OCR 血量数量不匹配：expected={expected}, actual={actual}, hp={hp_summary}")
+            missing_rows = report.hp_unreadable_rows or list(range(actual + 1, expected + 1))
+            context.log(
+                f"[WARN] OCR 血量数量不匹配：expected={expected}, actual={actual}, "
+                f"missing_rows={missing_rows}, hp={hp_summary}"
+            )
 
     def _click_page_action(self, context: RuntimeContext, page: Any, action_key: str, wait_ms: int | None = None) -> bool:
         action = page.actions.get(action_key) if page.actions else None

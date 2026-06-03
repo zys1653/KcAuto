@@ -187,6 +187,8 @@ class SortieTaskTest(unittest.TestCase):
                     "hp_region": {"x": 250, "y": 126, "width": 90, "height": 374},
                     "hp_padding": {"top": 8, "right": 4, "bottom": 4, "left": 4},
                     "hp_scale": 2,
+                    "debug_output_enabled": True,
+                    "debug_output_dir": "debug_screenshots/ocr",
                 }
             },
         )
@@ -196,6 +198,8 @@ class SortieTaskTest(unittest.TestCase):
         self.assertEqual(rule["region"], {"x": 250, "y": 126, "width": 90, "height": 374})
         self.assertEqual(rule["padding"], {"top": 8, "right": 4, "bottom": 4, "left": 4})
         self.assertEqual(rule["scale"], 2)
+        self.assertTrue(rule["debug_output_enabled"])
+        self.assertEqual(Path(rule["debug_output_dir"]), Path("debug_screenshots/ocr"))
 
     def test_hp_ocr_rate_controls_battle_ocr(self) -> None:
         rules = {

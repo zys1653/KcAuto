@@ -270,6 +270,8 @@ class MainWindow(QMainWindow):
         self.ocr_rate_spin.setDecimals(1)
         self.ocr_rate_spin.setSingleStep(0.5)
         self.ocr_rate_spin.setValue(float(ocr.get("hp_rate_per_sec", 2)))
+        self.ocr_debug_output_check = QCheckBox("输出 OCR 调试图")
+        self.ocr_debug_output_check.setChecked(bool(ocr.get("debug_output_enabled", False)))
 
         self.stop_hotkey_edit = QLineEdit(str(hotkeys.get("stop", "Ctrl+Shift+S")))
         self.save_debug_button = QPushButton("保存调试设置")
@@ -397,6 +399,7 @@ class MainWindow(QMainWindow):
         ocr_form.addRow("左边距", self.ocr_pad_left_spin)
         ocr_form.addRow("放大倍数", self.ocr_scale_spin)
         ocr_form.addRow("每秒识别次数", self.ocr_rate_spin)
+        ocr_form.addRow("", self.ocr_debug_output_check)
 
         page_group = QGroupBox("页面识别")
         page_layout = QVBoxLayout(page_group)
@@ -525,6 +528,8 @@ class MainWindow(QMainWindow):
             },
             "hp_scale": self.ocr_scale_spin.value(),
             "hp_rate_per_sec": self.ocr_rate_spin.value(),
+            "debug_output_enabled": self.ocr_debug_output_check.isChecked(),
+            "debug_output_dir": str(config["ocr"].get("debug_output_dir", "debug_screenshots/ocr")),
         }
         config["hotkeys"] = {**config["hotkeys"], "stop": self.stop_hotkey_edit.text().strip()}
         config["preview"] = {

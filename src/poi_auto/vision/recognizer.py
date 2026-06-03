@@ -44,14 +44,14 @@ class Recognizer:
         threshold: float | None = None,
         region: dict[str, Any] | None = None,
     ) -> MatchResult:
+        template_path = self.templates_root / template
+        if not template_path.exists():
+            return MatchResult(False, 0.0, template_path=template_path, error="missing_template")
+
         try:
             import cv2
         except ImportError as exc:
             raise RuntimeError("需要安装 opencv-python 才能执行模板匹配。") from exc
-
-        template_path = self.templates_root / template
-        if not template_path.exists():
-            return MatchResult(False, 0.0, template_path=template_path, error="missing_template")
 
         source = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
         offset_x = 0

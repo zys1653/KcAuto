@@ -21,7 +21,7 @@ vision:
   match_threshold: 0.86
 sortie:
   enabled: true
-  map: 1-2
+  map: 1-1
   formation: double_line
   max_runs: 10
   max_battles: 6
@@ -42,6 +42,8 @@ ocr:
     left: 4
   hp_scale: 2
   hp_rate_per_sec: 3.0
+  debug_output_enabled: true
+  debug_output_dir: debug_screenshots/ocr
 hotkeys:
   stop: z
 preview:
