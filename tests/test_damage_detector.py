@@ -32,6 +32,18 @@ class DamageDetectorTest(unittest.TestCase):
         self.assertEqual(report.hp_summary(), "1:33/33, 2:18/18, 3:17/35")
         self.assertIn("hp=[1:33/33, 2:18/18, 3:17/35]", report.summary())
 
+    def test_ocr_crop_uses_padding_without_exceeding_image(self) -> None:
+        detector = DamageDetector(Path("assets/templates"))
+        image = np.zeros((20, 20, 3), dtype=np.uint8)
+
+        cropped = detector._crop_with_padding(
+            image,
+            {"x": 5, "y": 5, "width": 5, "height": 5},
+            {"top": 3, "right": 2, "bottom": 1, "left": 4},
+        )
+
+        self.assertEqual(cropped.shape[:2], (9, 11))
+
     def test_ocr_unavailable_returns_error_without_raising(self) -> None:
         real_import = builtins.__import__
 

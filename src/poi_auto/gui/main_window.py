@@ -4,6 +4,7 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime
 from functools import partial
+import html
 import time
 from threading import Event
 from typing import Any
@@ -30,6 +31,7 @@ from PySide6.QtWidgets import (
     QSpinBox,
     QSplitter,
     QStackedWidget,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -168,6 +170,7 @@ class MainWindow(QMainWindow):
         input_config = self.config.get("input", {})
         vision = self.config.get("vision", {})
         sortie = self.config.get("sortie", {})
+        ocr = self.config.get("ocr", {})
         hotkeys = self.config.get("hotkeys", {})
         preview = self.config.get("preview", {})
 
@@ -196,7 +199,7 @@ class MainWindow(QMainWindow):
         self.image_label.setAlignment(Qt.AlignCenter)
         self.image_label.setMinimumSize(640, 384)
         self.image_label.setStyleSheet("QLabel { background: #15171a; color: #d6d8dc; border: 1px solid #30343b; }")
-        self.log_view = QPlainTextEdit()
+        self.log_view = QTextEdit()
         self.log_view.setReadOnly(True)
 
         self.sortie_map_combo = QComboBox()
@@ -210,6 +213,10 @@ class MainWindow(QMainWindow):
         self.stop_heavy_check.setChecked(bool(sortie.get("stop_on_heavy_damage", True)))
         self.hp_ocr_check = QCheckBox("记录 HP OCR")
         self.hp_ocr_check.setChecked(bool(sortie.get("hp_ocr_enabled", True)))
+        self.ship_count_combo = QComboBox()
+        for count in range(1, 7):
+            self.ship_count_combo.addItem(str(count), count)
+        self._set_combo_data(self.ship_count_combo, int(sortie.get("ship_count", 6)))
         self.max_battles_spin = self._spin(1, 20, int(sortie.get("max_battles", 6)))
         self.save_sortie_button = QPushButton("保存出击设置")
         self.save_sortie_button.clicked.connect(self.save_config_from_gui)
@@ -246,6 +253,23 @@ class MainWindow(QMainWindow):
         self.page_match_interval_spin = self._spin(250, 10000, int(preview.get("page_match_interval_ms", 1000)))
         self.preview_enabled_check.toggled.connect(self.update_preview_timer)
         self.preview_interval_spin.valueChanged.connect(self.update_preview_timer)
+
+        hp_region = ocr.get("hp_region", {}) or {}
+        hp_padding = ocr.get("hp_padding", {}) or {}
+        self.ocr_x_spin = self._spin(0, 5000, int(hp_region.get("x", 250)))
+        self.ocr_y_spin = self._spin(0, 5000, int(hp_region.get("y", 126)))
+        self.ocr_width_spin = self._spin(1, 5000, int(hp_region.get("width", 90)))
+        self.ocr_height_spin = self._spin(1, 5000, int(hp_region.get("height", 374)))
+        self.ocr_pad_top_spin = self._spin(0, 200, int(hp_padding.get("top", 8)))
+        self.ocr_pad_right_spin = self._spin(0, 200, int(hp_padding.get("right", 4)))
+        self.ocr_pad_bottom_spin = self._spin(0, 200, int(hp_padding.get("bottom", 4)))
+        self.ocr_pad_left_spin = self._spin(0, 200, int(hp_padding.get("left", 4)))
+        self.ocr_scale_spin = self._spin(1, 6, int(ocr.get("hp_scale", 2)))
+        self.ocr_rate_spin = QDoubleSpinBox()
+        self.ocr_rate_spin.setRange(0.1, 30.0)
+        self.ocr_rate_spin.setDecimals(1)
+        self.ocr_rate_spin.setSingleStep(0.5)
+        self.ocr_rate_spin.setValue(float(ocr.get("hp_rate_per_sec", 2)))
 
         self.stop_hotkey_edit = QLineEdit(str(hotkeys.get("stop", "Ctrl+Shift+S")))
         self.save_debug_button = QPushButton("保存调试设置")
@@ -312,6 +336,7 @@ class MainWindow(QMainWindow):
         form = QFormLayout(group)
         form.addRow("出击海域", self.sortie_map_combo)
         form.addRow("阵型选择", self.formation_combo)
+        form.addRow("舰娘数量", self.ship_count_combo)
         form.addRow("最大战斗次数", self.max_battles_spin)
         form.addRow("", self.stop_heavy_check)
         form.addRow("", self.hp_ocr_check)
@@ -360,6 +385,19 @@ class MainWindow(QMainWindow):
         preview_form.addRow("页面识别间隔 ms", self.page_match_interval_spin)
         preview_form.addRow("停止快捷键", self.stop_hotkey_edit)
 
+        ocr_group = QGroupBox("HP OCR")
+        ocr_form = QFormLayout(ocr_group)
+        ocr_form.addRow("区域 X", self.ocr_x_spin)
+        ocr_form.addRow("区域 Y", self.ocr_y_spin)
+        ocr_form.addRow("区域宽度", self.ocr_width_spin)
+        ocr_form.addRow("区域高度", self.ocr_height_spin)
+        ocr_form.addRow("上边距", self.ocr_pad_top_spin)
+        ocr_form.addRow("右边距", self.ocr_pad_right_spin)
+        ocr_form.addRow("下边距", self.ocr_pad_bottom_spin)
+        ocr_form.addRow("左边距", self.ocr_pad_left_spin)
+        ocr_form.addRow("放大倍数", self.ocr_scale_spin)
+        ocr_form.addRow("每秒识别次数", self.ocr_rate_spin)
+
         page_group = QGroupBox("页面识别")
         page_layout = QVBoxLayout(page_group)
         page_layout.addWidget(self.page_label)
@@ -376,11 +414,15 @@ class MainWindow(QMainWindow):
         layout.addWidget(window_group)
         layout.addWidget(capture_group)
         layout.addWidget(preview_group)
+        layout.addWidget(ocr_group)
         layout.addWidget(self.refresh_screenshot_button)
         layout.addWidget(page_group)
         layout.addWidget(self.save_debug_button)
         layout.addStretch(1)
-        return page
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(page)
+        return scroll
 
     def build_right_panel(self) -> QWidget:
         panel = QWidget()
@@ -430,7 +472,7 @@ class MainWindow(QMainWindow):
     def config_from_gui(self) -> dict[str, Any]:
         selected_title = self.target_window_combo.currentData() or ""
         config = dict(self.config)
-        for key in ("window", "game", "input", "vision", "sortie", "hotkeys", "preview", "ui", "task"):
+        for key in ("window", "game", "input", "vision", "sortie", "ocr", "hotkeys", "preview", "ui", "task"):
             config.setdefault(key, {})
         config["task"] = {**config["task"], "selected": self.task_combo.currentData()}
         current_item = self.nav_list.currentItem()
@@ -462,9 +504,27 @@ class MainWindow(QMainWindow):
             **config["sortie"],
             "map": self.sortie_map_combo.currentText(),
             "formation": self.formation_combo.currentData(),
+            "ship_count": int(self.ship_count_combo.currentData()),
             "max_battles": self.max_battles_spin.value(),
             "stop_on_heavy_damage": self.stop_heavy_check.isChecked(),
             "hp_ocr_enabled": self.hp_ocr_check.isChecked(),
+        }
+        config["ocr"] = {
+            **config["ocr"],
+            "hp_region": {
+                "x": self.ocr_x_spin.value(),
+                "y": self.ocr_y_spin.value(),
+                "width": self.ocr_width_spin.value(),
+                "height": self.ocr_height_spin.value(),
+            },
+            "hp_padding": {
+                "top": self.ocr_pad_top_spin.value(),
+                "right": self.ocr_pad_right_spin.value(),
+                "bottom": self.ocr_pad_bottom_spin.value(),
+                "left": self.ocr_pad_left_spin.value(),
+            },
+            "hp_scale": self.ocr_scale_spin.value(),
+            "hp_rate_per_sec": self.ocr_rate_spin.value(),
         }
         config["hotkeys"] = {**config["hotkeys"], "stop": self.stop_hotkey_edit.text().strip()}
         config["preview"] = {
@@ -758,11 +818,23 @@ class MainWindow(QMainWindow):
 
     def append_log(self, message: str) -> None:
         timestamp = datetime.now().strftime("%H:%M:%S")
-        self.log_view.appendPlainText(f"[{timestamp}] {message}")
+        color = self.log_color(message)
+        line = html.escape(f"[{timestamp}] {message}")
+        self.log_view.append(f'<span style="color:{color};">{line}</span>')
         if message.startswith("任务结束"):
             self.start_button.setEnabled(True)
             self.stop_button.setEnabled(False)
             self.state_label.setText("状态：空闲")
+
+    def log_color(self, message: str) -> str:
+        lowered = message.lower()
+        if any(token in message for token in ("异常", "失败", "停止", "缺少")):
+            return "#ff6b6b"
+        if any(token in message for token in ("WARN", "警告", "不匹配", "未知", "不可用")) or "warning" in lowered:
+            return "#f5c542"
+        if any(token in message for token in ("完成", "已保存", "已启动", "成功")):
+            return "#69db7c"
+        return "#d6d8dc"
 
     def state_label_set(self, message: str) -> None:
         self.state_label.setText(message)

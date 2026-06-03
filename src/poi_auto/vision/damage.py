@@ -111,6 +111,22 @@ class DamageDetector:
             return image[0:0, 0:0], x, y
         return image[y : y + height, x : x + width], x, y
 
+    def _crop_with_padding(self, image: np.ndarray, region: dict[str, Any] | None, padding: dict[str, Any] | None) -> np.ndarray:
+        if not region:
+            return image
+        pad = padding or {}
+        x = int(region.get("x", 0)) - int(pad.get("left", 0))
+        y = int(region.get("y", 0)) - int(pad.get("top", 0))
+        width = int(region.get("width", image.shape[1] - int(region.get("x", 0)))) + int(pad.get("left", 0)) + int(pad.get("right", 0))
+        height = int(region.get("height", image.shape[0] - int(region.get("y", 0)))) + int(pad.get("top", 0)) + int(pad.get("bottom", 0))
+        left = max(x, 0)
+        top = max(y, 0)
+        right = min(left + max(width, 0), image.shape[1])
+        bottom = min(top + max(height, 0), image.shape[0])
+        if right <= left or bottom <= top:
+            return image[0:0, 0:0]
+        return image[top:bottom, left:right]
+
     def _suppress_overlaps(
         self,
         points: list[tuple[int, int, float]],
@@ -132,11 +148,14 @@ class DamageDetector:
         except ImportError as exc:
             return [], "", f"unavailable:{exc.name}"
 
-        source, _offset_x, _offset_y = self._crop(image, rule.get("region"))
+        source = self._crop_with_padding(image, rule.get("region"), rule.get("padding"))
         if source.size == 0:
             return [], "", "invalid_region"
         gray = cv2.cvtColor(source, cv2.COLOR_RGB2GRAY)
         _threshold, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        scale = max(int(rule.get("scale", 1)), 1)
+        if scale > 1:
+            binary = cv2.resize(binary, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
         try:
             text = pytesseract.image_to_string(binary, config="--psm 6 -c tessedit_char_whitelist=0123456789/")
         except Exception as exc:

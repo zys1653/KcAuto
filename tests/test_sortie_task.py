@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from threading import Event
 import tempfile
+import time
 import unittest
 
 import numpy as np
@@ -65,18 +66,28 @@ class SortieTaskTest(unittest.TestCase):
         pages: list[PageMatch],
         device: FakeDevice | None = None,
         logs: list[str] | None = None,
+        config_update: dict | None = None,
     ) -> RuntimeContext:
         fake_device = device or FakeDevice()
-        return RuntimeContext(
-            config={
-                "sortie": {
-                    "map": "1-1",
-                    "formation": "line_ahead",
-                    "max_battles": 1,
-                    "stop_on_heavy_damage": True,
-                    "hp_ocr_enabled": False,
-                }
+        config = {
+            "sortie": {
+                "map": "1-1",
+                "formation": "line_ahead",
+                "max_battles": 1,
+                "stop_on_heavy_damage": True,
+                "hp_ocr_enabled": False,
+                "ship_count": 6,
             },
+            "ocr": {"hp_rate_per_sec": 2},
+        }
+        if config_update:
+            for key, value in config_update.items():
+                if isinstance(value, dict) and isinstance(config.get(key), dict):
+                    config[key] = {**config[key], **value}
+                else:
+                    config[key] = value
+        return RuntimeContext(
+            config=config,
             paths=SimpleNamespace(templates=Path("assets/templates")),
             device=fake_device,
             recognizer=SimpleNamespace(),
@@ -130,7 +141,7 @@ class SortieTaskTest(unittest.TestCase):
         }
         task = self.make_task(rules)
         task.sortie_started = True
-        task._detect_damage = lambda _context, _image: DamageReport()
+        task._detect_damage = lambda _context, _image, **_kwargs: DamageReport()
         device = FakeDevice()
         context = self.make_context(
             [
@@ -159,13 +170,102 @@ class SortieTaskTest(unittest.TestCase):
         }
         task = self.make_task(rules)
         task.sortie_started = True
-        task._detect_damage = lambda _context, _image: DamageReport(hp_values=[(33, 33), (18, 18), (17, 35)])
+        task._detect_damage = lambda _context, _image, **_kwargs: DamageReport(hp_values=[(33, 33), (18, 18), (17, 35)])
         logs: list[str] = []
 
         self.assertTrue(task.step(self.make_context([page("battle")], logs=logs)))
         self.assertEqual(task.last_wait_ms, 1)
         self.assertEqual(task.last_page_key, "battle")
         self.assertTrue(any("战斗中血量：1:33/33, 2:18/18, 3:17/35" in item for item in logs))
+
+    def test_config_ocr_overrides_sortie_rule_hp_region(self) -> None:
+        task = self.make_task({"hp_ocr": {"region": {"x": 1, "y": 2, "width": 3, "height": 4}}})
+        context = self.make_context(
+            [],
+            config_update={
+                "ocr": {
+                    "hp_region": {"x": 250, "y": 126, "width": 90, "height": 374},
+                    "hp_padding": {"top": 8, "right": 4, "bottom": 4, "left": 4},
+                    "hp_scale": 2,
+                }
+            },
+        )
+
+        rule = task._hp_ocr_rule(context)
+
+        self.assertEqual(rule["region"], {"x": 250, "y": 126, "width": 90, "height": 374})
+        self.assertEqual(rule["padding"], {"top": 8, "right": 4, "bottom": 4, "left": 4})
+        self.assertEqual(rule["scale"], 2)
+
+    def test_hp_ocr_rate_controls_battle_ocr(self) -> None:
+        rules = {
+            "entry_flow": [],
+            "loop_pages": {"battle": {"action_type": "collect_damage", "click": False, "poll_ms": 1}},
+            "hp_ocr": {"enabled": True},
+        }
+        task = self.make_task(rules)
+        task.sortie_started = True
+        seen: list[bool] = []
+
+        def fake_detect(_context: RuntimeContext, _image: np.ndarray, **kwargs: object) -> DamageReport:
+            seen.append(bool(kwargs.get("hp_ocr_enabled")))
+            return DamageReport()
+
+        task._detect_damage = fake_detect
+        task.last_hp_ocr_at = time.monotonic()
+        context = self.make_context(
+            [page("battle"), page("battle")],
+            config_update={"sortie": {"hp_ocr_enabled": True}, "ocr": {"hp_rate_per_sec": 10}},
+        )
+
+        self.assertTrue(task.step(context))
+        task.last_hp_ocr_at = 0.0
+        self.assertTrue(task.step(context))
+        self.assertEqual(seen, [False, True])
+
+    def test_hp_count_mismatch_logs_warning(self) -> None:
+        rules = {
+            "entry_flow": [],
+            "loop_pages": {"battle": {"action_type": "collect_damage", "click": False, "poll_ms": 1}},
+        }
+        task = self.make_task(rules)
+        task.sortie_started = True
+        task._detect_damage = lambda _context, _image, **_kwargs: DamageReport(
+            hp_values=[(1, 1), (2, 2), (3, 3), (4, 4), (5, 5)]
+        )
+        logs: list[str] = []
+
+        self.assertTrue(
+            task.step(
+                self.make_context(
+                    [page("battle")],
+                    logs=logs,
+                    config_update={"sortie": {"ship_count": 6, "hp_ocr_enabled": True}},
+                )
+            )
+        )
+        self.assertTrue(any("[WARN] OCR 血量数量不匹配：expected=6, actual=5" in item for item in logs))
+
+    def test_hp_count_match_does_not_log_warning(self) -> None:
+        rules = {
+            "entry_flow": [],
+            "loop_pages": {"battle": {"action_type": "collect_damage", "click": False, "poll_ms": 1}},
+        }
+        task = self.make_task(rules)
+        task.sortie_started = True
+        task._detect_damage = lambda _context, _image, **_kwargs: DamageReport(hp_values=[(1, 1), (2, 2)])
+        logs: list[str] = []
+
+        self.assertTrue(
+            task.step(
+                self.make_context(
+                    [page("battle")],
+                    logs=logs,
+                    config_update={"sortie": {"ship_count": 2, "hp_ocr_enabled": True}},
+                )
+            )
+        )
+        self.assertFalse(any("OCR 血量数量不匹配" in item for item in logs))
 
     def test_battle_transition_waits_then_processes_refreshed_page(self) -> None:
         rules = {
@@ -177,7 +277,7 @@ class SortieTaskTest(unittest.TestCase):
         }
         task = self.make_task(rules)
         task.sortie_started = True
-        task._detect_damage = lambda _context, _image: DamageReport()
+        task._detect_damage = lambda _context, _image, **_kwargs: DamageReport()
         device = FakeDevice()
         context = self.make_context(
             [
@@ -201,7 +301,7 @@ class SortieTaskTest(unittest.TestCase):
         }
         task = self.make_task(rules)
         task.sortie_started = True
-        task._detect_damage = lambda _context, _image: DamageReport()
+        task._detect_damage = lambda _context, _image, **_kwargs: DamageReport()
         context = self.make_context([page("battle"), page("unknown"), page("unknown")])
 
         self.assertTrue(task.step(context))
@@ -217,7 +317,7 @@ class SortieTaskTest(unittest.TestCase):
         }
         task = self.make_task(rules)
         task.sortie_started = True
-        task._detect_damage = lambda _context, _image: DamageReport(
+        task._detect_damage = lambda _context, _image, **_kwargs: DamageReport(
             states={"heavy": DamageStateResult("heavy", 1, 1.0)}
         )
         device = FakeDevice()

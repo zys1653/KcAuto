@@ -27,6 +27,7 @@ class SortieTask(BaseTask):
         self.last_page_key = ""
         self.battle_transition_waiting = False
         self.battle_transition_started_at = 0.0
+        self.last_hp_ocr_at = 0.0
 
     def step(self, context: RuntimeContext) -> bool:
         if context.page_matcher is None:
@@ -254,15 +255,19 @@ class SortieTask(BaseTask):
 
     def _collect_damage(self, context: RuntimeContext, page: Any, rule: dict[str, Any]) -> bool:
         screenshot = context.device.last_screenshot or context.device.capture_game()
-        self.last_damage_report = self._detect_damage(context, screenshot.image)
+        hp_ocr_enabled = page.key == "battle" and self._should_run_hp_ocr(context)
+        self.last_damage_report = self._detect_damage(context, screenshot.image, hp_ocr_enabled=hp_ocr_enabled)
         context.log(f"损伤采集：{self.last_damage_report.summary()}")
         if page.key == "battle":
             if self.last_damage_report.hp_values:
                 context.log(f"战斗中血量：{self.last_damage_report.hp_summary()}")
+                self._warn_if_hp_count_mismatch(context, self.last_damage_report)
             elif self.last_damage_report.ocr_error:
                 context.log(f"战斗中血量 OCR 不可用：{self.last_damage_report.ocr_error}")
+            elif hp_ocr_enabled:
+                self._warn_if_hp_count_mismatch(context, self.last_damage_report)
             else:
-                context.log("战斗中血量：未识别到 HP 数字。")
+                context.log("战斗中血量：等待下一次 OCR。")
         if bool(rule.get("click", False)):
             point = rule.get("point") or self.rules.get("default_click")
             if isinstance(point, dict):
@@ -307,7 +312,7 @@ class SortieTask(BaseTask):
         if not sortie_config.get("stop_on_heavy_damage", True):
             return False
         screenshot = context.device.last_screenshot or context.device.capture_game()
-        self.last_damage_report = self._detect_damage(context, screenshot.image)
+        self.last_damage_report = self._detect_damage(context, screenshot.image, hp_ocr_enabled=False)
         retreat_on = [str(item) for item in self.rules.get("damage_detection", {}).get("retreat_on", ["heavy"])]
         if self.last_damage_report.has_any(retreat_on):
             context.log(f"撤退损伤命中：{self.last_damage_report.summary()}")
@@ -315,13 +320,46 @@ class SortieTask(BaseTask):
         context.log(f"撤退损伤未命中：{self.last_damage_report.summary()}")
         return False
 
-    def _detect_damage(self, context: RuntimeContext, image: Any) -> DamageReport:
+    def _detect_damage(self, context: RuntimeContext, image: Any, *, hp_ocr_enabled: bool | None = None) -> DamageReport:
         damage_rules = dict(self.rules.get("damage_detection", {}) or {})
-        damage_rules["hp_ocr"] = self.rules.get("hp_ocr", {}) or {}
+        damage_rules["hp_ocr"] = self._hp_ocr_rule(context)
         sortie_config = context.config.get("sortie", {})
-        hp_ocr_enabled = bool(sortie_config.get("hp_ocr_enabled", self.rules.get("hp_ocr", {}).get("enabled", False)))
+        if hp_ocr_enabled is None:
+            hp_ocr_enabled = bool(sortie_config.get("hp_ocr_enabled", self.rules.get("hp_ocr", {}).get("enabled", False)))
         detector = DamageDetector(context.paths.templates)
         return detector.detect(image, damage_rules, hp_ocr_enabled=hp_ocr_enabled)
+
+    def _hp_ocr_rule(self, context: RuntimeContext) -> dict[str, Any]:
+        rule = dict(self.rules.get("hp_ocr", {}) or {})
+        ocr_config = context.config.get("ocr", {}) or {}
+        if "hp_region" in ocr_config:
+            rule["region"] = dict(ocr_config.get("hp_region") or {})
+        if "hp_padding" in ocr_config:
+            rule["padding"] = dict(ocr_config.get("hp_padding") or {})
+        if "hp_scale" in ocr_config:
+            rule["scale"] = int(ocr_config.get("hp_scale", 1))
+        rule.setdefault("max_rows", 6)
+        return rule
+
+    def _should_run_hp_ocr(self, context: RuntimeContext) -> bool:
+        sortie_config = context.config.get("sortie", {})
+        if not sortie_config.get("hp_ocr_enabled", self.rules.get("hp_ocr", {}).get("enabled", False)):
+            return False
+        rate = float((context.config.get("ocr", {}) or {}).get("hp_rate_per_sec", 2))
+        if rate <= 0:
+            return False
+        now = time.monotonic()
+        if now - self.last_hp_ocr_at < 1 / rate:
+            return False
+        self.last_hp_ocr_at = now
+        return True
+
+    def _warn_if_hp_count_mismatch(self, context: RuntimeContext, report: DamageReport) -> None:
+        expected = int(context.config.get("sortie", {}).get("ship_count", 6))
+        actual = len(report.hp_values)
+        if actual != expected:
+            hp_summary = report.hp_summary() if report.hp_values else "none"
+            context.log(f"[WARN] OCR 血量数量不匹配：expected={expected}, actual={actual}, hp={hp_summary}")
 
     def _click_page_action(self, context: RuntimeContext, page: Any, action_key: str, wait_ms: int | None = None) -> bool:
         action = page.actions.get(action_key) if page.actions else None

@@ -79,7 +79,10 @@ damage_detection:
 
 hp_ocr:
   enabled: true
-  region: { x: 245, y: 120, width: 105, height: 390 }
+  region: { x: 250, y: 126, width: 90, height: 374 }
+  padding: { top: 8, right: 4, bottom: 4, left: 4 }
+  scale: 2
+  max_rows: 6
 
 default_click:
   name: "继续"

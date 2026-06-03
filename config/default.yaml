@@ -28,6 +28,20 @@ sortie:
   stop_on_heavy_damage: true
   retreat_on_medium_damage: true
   hp_ocr_enabled: true
+  ship_count: 5
+ocr:
+  hp_region:
+    x: 250
+    y: 110
+    width: 90
+    height: 400
+  hp_padding:
+    top: 6
+    right: 4
+    bottom: 4
+    left: 4
+  hp_scale: 2
+  hp_rate_per_sec: 3.0
 hotkeys:
   stop: z
 preview:
